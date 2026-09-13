@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Portfolio expense tracker — view-only, Simplifi/Mint-style.
+"""Family expense & net-worth dashboard — view-only, Simplifi/Mint-style.
 
-Truth = per-folder classified.csv written by classify.py. The app reads them
+Truth = latest repo/classified-main-*.csv (written by classify.py) plus the
+members' investment sheets under data/<member>/investments. The app reads them
 fresh on every render and never writes, edits, or caches data.
 
 Run:  .venv/bin/streamlit run app.py
@@ -16,63 +17,43 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-BASELINE_EXCLUDED = {"Income tax", "Vehicles", "Loan & EMI",
-                     "Bank & DP charges", "Misc & small"}
+from common import BASELINE_EXCLUDED, fy_of, inr, load_members, money, payee_key
+from holdings import household_value, parse_investments, absolute_return_pct
+
 PAGES = ("Overview", "Transactions", "Categories", "Review", "Holdings")
 
 
 # --------------------------------------------------------------------------
 # data plumbing
 # --------------------------------------------------------------------------
+def latest_inventory():
+    """Latest repo/classified-main-*.csv path, or None."""
+    files = sorted(glob.glob(os.path.join("repo", "classified-main-*.csv")))
+    return files[-1] if files else None
+
+
 def load_rows():
+    path = latest_inventory()
+    if not path:
+        return []
     rows = []
-    for path in sorted(glob.glob("*/classified.csv")):
-        with open(path, newline="") as f:
-            for r in csv.DictReader(f):
-                d = dt.datetime.strptime(r["DATE"], "%d-%m-%Y").date()
-                rows.append({
-                    "file": r["FILE"], "date": d, "date_s": d.strftime("%d-%m-%Y"),
-                    "mode": r["MODE"], "part": r["PARTICULARS"],
-                    "dep": float(r["DEPOSIT"]), "wd": float(r["WITHDRAWAL"]),
-                    "kind": r["KIND"], "category": r["CATEGORY"] or "—",
-                    "fy": fy_of(d), "ym": d.strftime("%Y-%m"),
-                    "payee": payee_key(r["PARTICULARS"]),
-                })
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            d = dt.datetime.strptime(r["DATE"], "%d-%m-%Y").date()
+            rows.append({
+                "member": r["MEMBER"], "file": r["FILE"], "date": d,
+                "date_s": d.strftime("%d-%m-%Y"),
+                "mode": r["MODE"], "part": r["PARTICULARS"],
+                "dep": float(r["DEPOSIT"]), "wd": float(r["WITHDRAWAL"]),
+                "kind": r["KIND"], "category": r["CATEGORY"] or "—",
+                "fy": fy_of(d), "ym": d.strftime("%Y-%m"),
+                "payee": payee_key(r["PARTICULARS"]),
+            })
     return rows
 
 
-def fy_of(d):
-    yy = d.year if d.month >= 4 else d.year - 1
-    return f"{yy}-{str(yy + 1)[-2:]}"
-
-
-def payee_key(p):
-    if p.startswith("UPI/"):
-        m = re.search(r"([A-Za-z0-9._@-]+@[A-Za-z]+)", p)
-        return "UPI:" + (m.group(1).split("@")[0] if m else p.split("/")[1])
-    if p.startswith(("VPS/", "IPS/", "VSI/")):
-        return p.split("/")[0] + ":" + p.split("/")[1]
-    if p.startswith("BIL/"):
-        return "BIL:" + (p.split("/")[2] if len(p.split("/")) > 2 else "?")
-    if p.startswith("MMT/"):
-        m = re.search(r"([A-Za-z0-9._@-]+@[A-Za-z]+)", p)
-        return "MMT:" + m.group(1).split("@")[0] if m else "MMT:" + p.split("/")[-1]
-    if p.startswith(("NEFT-", "RTGS-")):
-        return "BANK:" + p[:25]
-    if p.startswith("VIN/") or p.startswith("GIB/"):
-        return p.split("/")[0] + ":" + p.split("/")[1]
-    return "OTHER:" + p[:24]
-
-
-def inr(x):
-    neg = x < 0
-    s = f"{abs(x):,.2f}".split(".")
-    head = re.sub(r"[^0-9,]", "", s[0]).lstrip("0") or "0"
-    return ("-" if neg else "") + "₹" + head + "." + s[1]
-
-
-def money(s):
-    return float(str(s or "").replace(",", "").replace('"', "").strip()) if s else 0.0
+def load_assets():
+    return parse_investments(load_members())
 
 
 def frame(rows):
@@ -96,7 +77,7 @@ def sidebar_filters(rows):
     kinds = sorted({r["kind"] for r in rows})
     maxwd = int(max(r["wd"] for r in rows) or 1)
     with st.sidebar:
-        st.caption("view-only · data via classify.py / CSVs")
+        st.caption("view-only · data via classify.py / authored CSVs")
         page = st.radio("Section", PAGES)
         fys = st.multiselect("Financial years", fis, key="fys",
                              default=list(fis))
@@ -164,65 +145,58 @@ def page_overview(rows, f):
         st.plotly_chart(fig, width="stretch")
 
 
-def load_assets():
-    """Member asset sheets. sch-* = husband, mch-* = spouse (CSV as truth)."""
-    assets, mch_total = [], None
-    if os.path.exists("[MF-PORTFOLIO].csv"):
-        with open("[MF-PORTFOLIO].csv", newline="") as f:
-            for r in csv.DictReader(f):
-                if (r.get("Folio No.") or "").strip().lower() == "total":
-                    continue
-                assets.append({"member": "sch", "cat": "MF",
-                               "value": money(r.get("Market Value (INR)"))})
-    for path, member in (("[SHARES-PORTFOLIO]-gold.csv", "sch"), ("[ALL-INVESTMENTS].csv", "mch")):
-        if not os.path.exists(path):
-            continue
-        with open(path, newline="") as f:
-            for row in csv.reader(f):
-                if len(row) < 2:
-                    continue
-                lbl, val = (row[0] or "").strip(), money(row[1])
-                if not lbl:
-                    continue
-                if lbl.lower() == "total":
-                    if member == "mch":
-                        mch_total = val
-                    continue
-                assets.append({"member": member, "cat": lbl, "value": val})
-    return assets, mch_total
-
-
-def page_holdings():
-    st.markdown("##### Holdings — as authored in the asset CSVs (view-only)")
-    assets, mch_total = load_assets()
+def page_holdings(assets):
+    st.markdown("##### Holdings — as authored in the members' investment CSVs (view-only)")
     if not assets:
-        st.info("No asset CSVs (sch-*.csv / mch-*.csv) found.")
+        st.info("No investment CSVs found under any member's investments/.")
         return
-    by_member = {"sch": 0.0, "mch": 0.0}
-    for a in assets:
-        by_member[a["member"]] += a["value"]
-    total = sum(by_member.values())
+
+    total = household_value(assets)
+    by_member = {name: (
+        sum(s["market"] or s["cost"] or 0 for s in e["schemes"])
+        + sum(a["value"] for a in e["assets"])
+    ) for name, e in assets.items()}
     c1, c2, c3 = st.columns(3)
     c1.metric("Household net worth", inr(total))
-    c2.metric("Husband (sch-*)", inr(by_member["sch"]))
-    c3.metric("Spouse (mch-*)", inr(by_member["mch"]))
-    if mch_total is not None and abs(mch_total - by_member["mch"]) > 0.5:
-        st.error(f"[ALL-INVESTMENTS].csv Total ({inr(mch_total)}) ≠ Σ rows ({inr(by_member['mch'])})")
+    st.caption("Net worth = marked schemes + authored asset rows (no debts tracked).")
+
+    for name, entry in assets.items():
+        st.markdown(f"**{name.title()}**")
+        if entry["total"] is not None:
+            rows_sum = sum(s["market"] or s["cost"] or 0 for s in entry["schemes"])
+            rows_sum += sum(a["value"] for a in entry["assets"])
+            if abs(rows_sum - entry["total"]) > 0.5:
+                st.error(
+                    f"{name}: sheets' stated Total ({inr(entry['total'])}) ≠ "
+                    f"Σ rows ({inr(rows_sum)})")
+        if entry["schemes"]:
+            st.caption("Mutual funds / schemes (absolute return = latest value vs cost)")
+            tbl = [{
+                "Scheme": s["scheme"][:60], "Folio": s["folio"],
+                "Units": (f"{s['units']:,.4f}" if s["units"] is not None else ""),
+                "Latest NAV": (f"{s['nav']:,.4f} @ {s['nav_date']}"
+                               if s["nav"] is not None else ""),
+                "Value at cost": inr(s["cost"]) if s["cost"] is not None else "—",
+                "Value latest": inr(s["market"]) if s["market"] is not None else "—",
+                "Return": (f"{s['ret_pct']:+.1f}%" if s["ret_pct"] is not None else "—"),
+            } for s in entry["schemes"]]
+            st.dataframe(tbl, width="stretch", hide_index=True,
+                         height=min(400, 35 * len(tbl) + 40))
+        if entry["assets"]:
+            st.dataframe(
+                [{"Asset / claim": a["label"], "Amount": inr(a["value"])}
+                 for a in sorted(entry["assets"], key=lambda a: -a["value"])],
+                width="stretch", height=min(400, 35 * len(entry["assets"]) + 40),
+                hide_index=True,
+            )
 
     agg = {}
-    for a in assets:
-        agg[(a["member"], a["cat"])] = agg.get((a["member"], a["cat"]), 0.0) + a["value"]
-    for member, name in (("sch", "Husband"), ("mch", "Spouse")):
-        rows = [{"Category": c, "Amount": inr(v)}
-                for (m, c), v in sorted(agg.items(), key=lambda kv: -abs(kv[1]))
-                if m == member]
-        if rows:
-            st.markdown(f"**{name}**")
-            st.dataframe(rows, width="stretch", height=min(360, 35 * len(rows) + 40),
-                         hide_index=True)
-
-    fig = px.pie(names=[c for (_m, c), _v in agg.items()],
-                 values=[v for _k, v in agg.items()], hole=0.45)
+    for name, e in assets.items():
+        for s in e["schemes"]:
+            agg[f"{name.title()}: MF"] = agg.get(f"{name.title()}: MF", 0.0) + (s["market"] or 0.0)
+        for a in e["assets"]:
+            agg[f"{name.title()}: {a['label']}"] = agg.get(f"{name.title()}: {a['label']}", 0.0) + a["value"]
+    fig = px.pie(names=list(agg), values=list(agg.values()), hole=0.45)
     fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), showlegend=True)
     st.plotly_chart(fig, width="stretch")
 
@@ -239,8 +213,9 @@ def page_transactions(rows, f):
     if only_review:
         rr = [r for r in rr if r["kind"] == "review"]
     rr.sort(key=lambda r: (r["date"], r["ym"]), reverse=True)
-    tbl = [{"Date": r["date_s"], "Mode": r["mode"], "Category": r["category"],
-            "Kind": r["kind"], "Particulars": r["part"][:120],
+    tbl = [{"Date": r["date_s"], "Member": r["member"], "Mode": r["mode"],
+            "Category": r["category"], "Kind": r["kind"],
+            "Particulars": r["part"][:120],
             "Debit": r["wd"] or None, "Credit": r["dep"] or None}
            for r in rr]
     st.caption(f"{len(rr)} rows")
@@ -334,7 +309,7 @@ def main():
     st.title("Expense tracker")
     rows = load_rows()
     if not rows:
-        st.warning("No classified.csv found. Run `python3 classify.py` first.")
+        st.warning("No repo/classified-main-*.csv found. Run `python3 classify.py` first.")
         return
     f = sidebar_filters(rows)
     if f["page"] == "Overview":
@@ -344,7 +319,7 @@ def main():
     elif f["page"] == "Categories":
         page_categories(rows, f)
     elif f["page"] == "Holdings":
-        page_holdings()
+        page_holdings(load_assets())
     else:
         page_review(rows, f)
 
