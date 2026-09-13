@@ -69,7 +69,12 @@ def payee_key(p):
     if p.startswith(("VPS/", "IPS/", "VSI/")):
         return t[0] + ":" + t[1]
     if p.startswith("BIL/"):
-        return "BIL:" + (t[2] if len(t) > 2 else "?")
+        for t in p.split("/")[1:]:
+            if t in ("ONL", "INFT", "NEFT", "RTGS", "DTAX", "IMPS") or t.isdigit():
+                continue
+            if len(t) >= 3:
+                return "BIL:" + t
+        return "BIL:?"
     if p.startswith("MMT/"):
         m = re.search(r"([A-Za-z0-9._@-]+@[A-Za-z]+)", p)
         if m:

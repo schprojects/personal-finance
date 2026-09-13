@@ -1,0 +1,129 @@
+"""Unit tests for classify.py (rule tagging, parser, reconciliation, outputs)."""
+import contextlib
+import csv
+import io
+import os
+import tempfile
+import unittest
+
+import classify
+
+
+class TestTag(unittest.TestCase):
+    def test_grocery_kw(self):
+        self.assertEqual(classify.tag("VPS/[MERCHANT]/20171231101939/0", ""),
+                         ("expense", "Groceries"))
+
+    def test_bank_charges_by_mode(self):
+        self.assertEqual(classify.tag("XX", "BANK CHARGES"),
+                         ("expense", "Bank & DP charges"))
+
+    def test_chelvaya_threshold(self):
+        self.assertEqual(classify.tag("UPI/chelvaya@ok/...", "", 5000),
+                         ("expense", "Transport & fuel"))
+        self.assertEqual(classify.tag("UPI/chelvaya@ok/...", "", 15000),
+                         ("expense", "Loan & EMI"))
+
+    def test_investment_excluded(self):
+        self.assertEqual(classify.tag("EBA/MF-123", "")[0], "investment")
+
+    def test_unknown_goes_to_review(self):
+        self.assertEqual(classify.tag("RANDOM-UNKNOWN-PAYEE", ""),
+                         ("review", "REVIEW"))
+
+    def test_family_support_before_generic(self):
+        self.assertEqual(classify.tag("UPI/[MEMBER]/...", ""),
+                         ("expense", "Family support"))
+
+
+class TestBucketLongTail(unittest.TestCase):
+    def test_small_totals_downgraded_to_misc(self):
+        rows = [
+            {"part": "UPI/a@ok/1", "wd": 300.0, "kind": "review", "category": "REVIEW"},
+            {"part": "UPI/a@ok/2", "wd": 300.0, "kind": "review", "category": "REVIEW"},
+            {"part": "UPI/bigspender@ok/1", "wd": 2000.0, "kind": "review", "category": "REVIEW"},
+        ]
+        classify.bucket_long_tail(rows)
+        by_part = {r["part"]: r for r in rows}
+        self.assertEqual(by_part["UPI/a@ok/1"]["kind"], "expense")
+        self.assertEqual(by_part["UPI/a@ok/1"]["category"], "Misc & small")
+        self.assertEqual(by_part["UPI/bigspender@ok/1"]["kind"], "review")
+
+
+def make_statement(path):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([])
+        w.writerow(["Statement of Transactions in SavingsNumber: XXXXXXXX3404"])
+        w.writerow([])
+        w.writerow(["DATE", "MODE", "PARTICULARS", "DEPOSITS", "WITHDRAWALS", "BALANCE"])
+        w.writerow(["01-04-2017", "", "B/F", 0, 0, 1000.00])
+        w.writerow(["02-04-2017", "", "UPI/srikeshavamart@ok/Payment", 0, 100, 900.00])
+        w.writerow(["03-04-2017", "", "ACH/INCOME", 250, 0, 1150.00])
+        w.writerow(["04-04-2017", "BANK CHARGES", "something", 0, 50, 1100.00])
+        w.writerow(["05-04-2017", "", "RANDOM-UNKNOWN-PAYEE", 0, 777, 323.00])
+
+
+class TestReconcile(unittest.TestCase):
+    def test_parses_and_reconciles_tiny_statement(self):
+        got = None
+        with tempfile.TemporaryDirectory() as d:
+            make_statement(os.path.join(d, "t.csv"))
+            blocks = classify.parse_blocks(os.path.join(d, "t.csv"))
+            self.assertEqual(len(blocks), 1)
+            acct, txs = blocks[0]
+            opening, ok, msg, txs = classify.reconcile(acct, txs)
+            self.assertTrue(ok, msg)
+            self.assertEqual(opening, 1000.00)
+            self.assertEqual(txs[-1]["bal"], 323.00)
+
+
+class TestRunOutputs(unittest.TestCase):
+    def test_numbered_runs_and_consolidated_inventory(self):
+        rows = [
+            {"member": "[MEMBER]", "file": "t.csv", "account": "A",
+             "date": "01-04-2017", "mode": "", "part": "P1",
+             "dep": 0.0, "wd": 100.0, "bal": 900.0,
+             "kind": "expense", "category": "Groceries", "fy": "2017-18"},
+            {"member": "[MEMBER]", "file": "t.csv", "account": "A",
+             "date": "02-04-2017", "mode": "", "part": "P2",
+             "dep": 0.0, "wd": 40.0, "bal": 860.0,
+             "kind": "review", "category": "REVIEW", "fy": "2017-18"},
+            {"member": "[MEMBER]", "file": "t.csv", "account": "A",
+             "date": "01-04-2018", "mode": "", "part": "P3",
+             "dep": 0.0, "wd": 5.0, "bal": 855.0,
+             "kind": "expense", "category": "Utilities", "fy": "2018-19"},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            with contextlib.chdir(d):
+                self.assertEqual(classify.next_run_number(), 1)
+                by_fy = classify.write_run(1, rows)
+                self.assertEqual(set(by_fy), {"2017-18", "2018-19"})
+                self.assertTrue(os.path.exists("output/classified-1.csv"))
+                self.assertTrue(os.path.exists("output/review-1.csv"))
+                self.assertTrue(os.path.exists("repo/classified-main-1.csv"))
+                self.assertTrue(os.path.exists("output/2017-18/classified-1.csv"))
+
+                with open("output/review-1.csv", newline="") as f:
+                    review = list(csv.DictReader(f))
+                self.assertEqual([r["PARTICULARS"] for r in review], ["P2"])
+
+                def rows_of(p):
+                    with open(p, newline="") as f:
+                        return list(csv.DictReader(f))
+
+                main = rows_of("repo/classified-main-1.csv")
+                slices = rows_of("output/2017-18/classified-1.csv") + \
+                    rows_of("output/2018-19/classified-1.csv")
+                self.assertEqual(len(main), len(rows))
+                self.assertEqual(len(main), len(slices))
+
+                self.assertEqual(classify.next_run_number(), 2)
+                classify.write_run(2, rows)
+                self.assertTrue(os.path.exists("output/classified-2.csv"))
+                self.assertTrue(os.path.exists("repo/classified-main-2.csv"))
+                self.assertEqual(classify.next_run_number(), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
