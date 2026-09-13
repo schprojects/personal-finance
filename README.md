@@ -49,8 +49,9 @@ data/<member>/investments/<file>.csv            authored holdings
 ### Classifier (`classify.py`)
 
 The only writer. Reads every member's bank statements, classifies each
-transaction via a keyword `RULES` table (first-match-wins) plus manual
-overrides (`manual.csv`), and writes numbered, non-destructive runs:
+transaction via the external, gitignored `rules.txt` (first-match-wins,
+) plus manual overrides (`manual.csv`), and writes numbered,
+non-destructive runs:
 
 | File | Purpose |
 |---|---|
@@ -62,8 +63,20 @@ overrides (`manual.csv`), and writes numbered, non-destructive runs:
 `N` = 1 + max run number already in `output/`, so re-runs never clobber old
 history. `data/` is never written to.
 
-A row in `review-<N>.csv` exits review after a human adds a rule or
-`manual.csv` entry for that payee, then re-runs the classifier.
+A row in `review-<N>.csv` exits review after a human adds a rule for that
+payee, then re-runs the classifier:
+
+```sh
+# see what's stuck in review, grouped by payee + suggested rule lines:
+.venv/bin/python review.py
+# e.g. paste    expense,My category,BIGPAYEE   into rules.txt, then:
+.venv/bin/python classify.py
+```
+
+`rules.txt` lives at the repo root but is **gitignored** — rule syntax is
+`KIND,CATEGORY,KEYWORDS [@mode:M] [@amt<=n|@amt>n]` (KEYWORDS: space-phrases,
+`|` = any-of; see the header comment in the file). If it is ever missing,
+`classify.py` fails loudly instead of guessing.
 
 ### Dashboard (`app.py`)
 
@@ -73,11 +86,11 @@ apply across five sections:
 
 | Section | What it shows |
 |---|---|
-| **Overview** | net spend, per-year average, top category, unreviewed count; focus-year monthly trend vs prior FY; top-8 category donut |
+| **Overview** | net spend, savings rate, income vs spend per FY, top category, unreviewed count; focus-year monthly trend vs prior FY + cumulative spend line; top-8 category donut |
 | **Transactions** | full classified table: search, kind/category filter, review-only toggle, ₹-formatted |
 | **Categories** | per-category monthly trend across FYs + top payees within it |
-| **Review** | unresolved rows grouped by payee (count + ₹), with per-payee drill |
-| **Holdings** | household net worth from authored investment sheets; MF scheme tables (units, cost, latest NAV, absolute return %); label/value asset tables; per-member donut |
+| **Review** | unresolved rows grouped by payee (count + ₹), per-payee drill, and a copy-paste `rules.txt` line to auto-classify that payee |
+| **Holdings** | household net worth from authored investment sheets; MF scheme tables (units, cost, latest NAV, absolute return % **+ XIRR**); label/value asset tables; per-member donut + largest-schemes bar |
 
 Holdings parses two auto-detected sheet shapes:
 - **MF detail** (has `scheme name` + `market value` columns) -- per-scheme table
@@ -85,9 +98,10 @@ Holdings parses two auto-detected sheet shapes:
 - **Label/value** (everything else) -- "category, ₹" rows with optional
   stated-Total cross-check
 
-Purchase dates are not yet available for MF entries; only current value is
-shown. When purchase dates appear in `[MF-PORTFOLIO].csv`, XIRR can be added in
-`holdings.py` with no app changes.
+To see **XIRR (annualized)** for a scheme, add a `Purchase Date` column
+(`dd-mm-yyyy`) to its MF sheet (e.g. `data/[MEMBER]/investments/[MF-PORTFOLIO].csv`):
+the app then values cost at that date vs market at the latest NAV. No column,
+no XIRR — the cell shows `—` and the caption explains why.
 
 ### Shared logic (`common.py`)
 
@@ -109,12 +123,14 @@ holdings sheet parsing and return calculation.
 | File | Purpose |
 |---|---|
 | `common.py` | shared helpers |
+| `rules.py` | rule language (Rule / RuleSet) for `rules.txt` |
 | `classify.py` | classifier (the only writer) |
+| `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `app.py` | streamlit dashboard (view-only) |
-| `holdings.py` | investment sheet parser |
+| `holdings.py` | investment sheet parser + XIRR |
 | `tests/` | unit tests |
 | `specs/` | project contracts |
-| `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `members.yaml` |
+| `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `members.yaml`, `rules.txt` |
 
 ## Out of scope (for now)
 
