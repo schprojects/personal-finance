@@ -1,16 +1,17 @@
 # Expense Tracker
 
-View-only dashboard for the classified bank-statement expenses, shaped like a
-market-leading tracker (Simplifi / Mint style). The CSVs written by
-`classify.py` are the source of truth; the app reads them fresh on every render
-and never writes or edits anything.
+View-only family expense and net-worth dashboard — Simplifi / Mint style,
+built on classified ICICI bank-statement CSVs and authored investment sheets.
 
-## Run
+## Quick start
 
 ```sh
-# one-time setup (isolated environment)
+# one-time setup
 python3 -m venv .venv
-.venv/bin/pip install streamlit plotly
+.venv/bin/pip install streamlit plotly pyyaml
+
+# classify bank statements -> output/ + repo/
+.venv/bin/python classify.py
 
 # run the dashboard
 .venv/bin/streamlit run app.py
@@ -18,51 +19,107 @@ python3 -m venv .venv
 
 Open the URL streamlit prints (default `http://localhost:8501`).
 
-## Requirements
+## Run the tests
 
-- Python 3 (tested on 3.14; the app itself is stdlib-only)
-- Data already classified — from the project root run:
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+```
 
-  ```sh
-  python3 classify.py
-  ```
+## How it works
 
-  This writes `classified.csv`, `review_me.csv`, and `expense_summary.csv` in
-  each year folder, plus `expense_summary_all_years.csv` at the root.
+### Members
 
-## Sections (sidebar)
+`members.yaml` maps each member name to their data directory:
 
-- **Overview** — net spend and per-year averages, top category, unreviewed
-  amount; monthly spend line for a focus year vs the prior year; top-8
-  categories donut.
-- **Transactions** — every classified row: free-text search (particulars /
-  payee / category), filters, review-only toggle, sortable ₹-formatted table.
-- **Categories** — pick a category: its monthly trend across years, top payees
-  within it.
-- **Review** — unresolved rows grouped by payee (rows, ₹), with per-payee drill.
-- **Holdings** — household net worth from the asset CSVs (`sch-*` = husband,
-  `mch-*` = spouse): per-member totals + tables, one asset-class donut. Values
-  shown exactly as authored; warns if an asset sheet's stated Total disagrees
-  with its rows.
+```yaml
+members:
+  - name: [MEMBER]
+    data_dir: data/[MEMBER]
+  - name: [MEMBER]
+    data_dir: data/[MEMBER]
+```
 
-Shared sidebar filters — financial years, categories, row kinds, max single
-amount — apply to every section. **"Daily-spend baseline"** hides
-tax / loans / cars / bank-charges / misc to show day-to-day spending only.
+Each member's data lives under their data directory:
 
-## Files
+```
+data/<member>/bank-statements/<FY>/<file>.csv   raw statements
+data/<member>/investments/<file>.csv            authored holdings
+```
+
+### Classifier (`classify.py`)
+
+The only writer. Reads every member's bank statements, classifies each
+transaction via a keyword `RULES` table (first-match-wins) plus manual
+overrides (`manual.csv`), and writes numbered, non-destructive runs:
 
 | File | Purpose |
 |---|---|
-| `app.py` | the dashboard (run with streamlit) |
-| `classify.py` | the classifier — the only data-entry tool |
-| `*/classified.csv` | classified transactions (truth, per year) |
-| `*/review_me.csv` | rows the classifier couldn't confidently classify |
-| `expense_summary_all_years.csv` | cross-year rollup written by classify.py |
-| `[MF-PORTFOLIO].csv` | husband's mutual-fund holdings (market value per scheme) |
-| `[SHARES-PORTFOLIO]-gold.csv` | husband's other assets / claims (label, ₹) |
-| `[ALL-INVESTMENTS].csv` | spouse's net assets (category, ₹) — detail files (`mch-*.csv`) drop in later |
+| `output/classified-<N>.csv` | all classified rows (all members) |
+| `output/review-<N>.csv` | rows needing a human ruling |
+| `output/<FY>/classified-<N>.csv` | per-FY slices |
+| `repo/classified-main-<N>.csv` | consolidated inventory (what the app reads) |
 
-## Export to PDF (later)
+`N` = 1 + max run number already in `output/`, so re-runs never clobber old
+history. `data/` is never written to.
 
-Plotly figures can be exported via `fig.write_image()` / `kaleido` without
-touching the app's data path. Not wired up yet.
+A row in `review-<N>.csv` exits review after a human adds a rule or
+`manual.csv` entry for that payee, then re-runs the classifier.
+
+### Dashboard (`app.py`)
+
+Reads the latest `repo/classified-main-*.csv` on every render. Sidebar
+filters (FY, category, kind, max amount) and a "Daily-spend baseline" toggle
+apply across five sections:
+
+| Section | What it shows |
+|---|---|
+| **Overview** | net spend, per-year average, top category, unreviewed count; focus-year monthly trend vs prior FY; top-8 category donut |
+| **Transactions** | full classified table: search, kind/category filter, review-only toggle, ₹-formatted |
+| **Categories** | per-category monthly trend across FYs + top payees within it |
+| **Review** | unresolved rows grouped by payee (count + ₹), with per-payee drill |
+| **Holdings** | household net worth from authored investment sheets; MF scheme tables (units, cost, latest NAV, absolute return %); label/value asset tables; per-member donut |
+
+Holdings parses two auto-detected sheet shapes:
+- **MF detail** (has `scheme name` + `market value` columns) -- per-scheme table
+  with cost value, units, latest NAV + date, and return %
+- **Label/value** (everything else) -- "category, ₹" rows with optional
+  stated-Total cross-check
+
+Purchase dates are not yet available for MF entries; only current value is
+shown. When purchase dates appear in `[MF-PORTFOLIO].csv`, XIRR can be added in
+`holdings.py` with no app changes.
+
+### Shared logic (`common.py`)
+
+`fy_of`, `inr`, `money`, `payee_key`, `load_members`, `statements_for`,
+`investments_for`, `BASELINE_EXCLUDED` -- imported by both `classify.py` and
+`app.py`.
+
+### Tests (`tests/`)
+
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Covers: `common` helpers, classifier rules / reconciliation / numbered outputs,
+holdings sheet parsing and return calculation.
+
+## Files tracked in git
+
+| File | Purpose |
+|---|---|
+| `common.py` | shared helpers |
+| `classify.py` | classifier (the only writer) |
+| `app.py` | streamlit dashboard (view-only) |
+| `holdings.py` | investment sheet parser |
+| `tests/` | unit tests |
+| `specs/` | project contracts |
+| `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `members.yaml` |
+
+## Out of scope (for now)
+
+- YNAB-style budgeting (no budget data exists)
+- Database backend (plain CSVs are the truth by spec)
+- Historic/seasonal MF tracking
+- PDF export (kaleido via plotly `fig.write_image()` is a drop-in)
+- Calendar heatmap, monthly per-category drill tables
