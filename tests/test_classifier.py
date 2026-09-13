@@ -9,30 +9,44 @@ import unittest
 import classify
 
 
-class TestTag(unittest.TestCase):
+FIXTURE_RULES = """\
+# fixture: mirrors the sentiment the real rules.txt expresses
+expense,Bank & DP charges,@mode:BANK CHARGES
+expense,Transport & fuel,[MERCHANT] @amt<=10000
+expense,Loan & EMI,[MERCHANT] @amt>10000
+income,,INT.PD
+investment,,EBA/MF-
+expense,Family support,[MEMBER]
+expense,Groceries,[MERCHANT]
+"""
+
+
+class TestRuleSet(unittest.TestCase):
+    def setUp(self):
+        self.rs = classify.RuleSet.parse(FIXTURE_RULES)
+
     def test_grocery_kw(self):
-        self.assertEqual(classify.tag("VPS/[MERCHANT]/20171231101939/0", ""),
+        self.assertEqual(self.rs.match("VPS/[MERCHANT]/20171231101939/0", ""),
                          ("expense", "Groceries"))
 
     def test_bank_charges_by_mode(self):
-        self.assertEqual(classify.tag("XX", "BANK CHARGES"),
+        self.assertEqual(self.rs.match("XX", "BANK CHARGES"),
                          ("expense", "Bank & DP charges"))
 
     def test_chelvaya_threshold(self):
-        self.assertEqual(classify.tag("UPI/chelvaya@ok/...", "", 5000),
+        self.assertEqual(self.rs.match("UPI/chelvaya@ok/...", "", 5000),
                          ("expense", "Transport & fuel"))
-        self.assertEqual(classify.tag("UPI/chelvaya@ok/...", "", 15000),
+        self.assertEqual(self.rs.match("UPI/chelvaya@ok/...", "", 15000),
                          ("expense", "Loan & EMI"))
 
     def test_investment_excluded(self):
-        self.assertEqual(classify.tag("EBA/MF-123", "")[0], "investment")
+        self.assertEqual(self.rs.match("EBA/MF-123", "")[0], "investment")
 
     def test_unknown_goes_to_review(self):
-        self.assertEqual(classify.tag("RANDOM-UNKNOWN-PAYEE", ""),
-                         ("review", "REVIEW"))
+        self.assertEqual(self.rs.match("RANDOM-UNKNOWN-PAYEE", ""), None)
 
     def test_family_support_before_generic(self):
-        self.assertEqual(classify.tag("UPI/[MEMBER]/...", ""),
+        self.assertEqual(self.rs.match("UPI/[MEMBER]/...", ""),
                          ("expense", "Family support"))
 
 
