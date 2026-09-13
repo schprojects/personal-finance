@@ -10,6 +10,7 @@ Two sheet shapes (auto-detected by header):
 Pure stdlib — no streamlit/plotly, so it is unit-testable on its own.
 """
 import csv
+import datetime as dt
 import os
 
 MF_KEYWORDS = ("scheme name", "unit balance", "market value")
@@ -21,8 +22,9 @@ MF_COLS = {
     "nav_date": ("nav date",),
     "nav": ("nav",),
     "market": ("market value",),
+    "purchase_date": ("purchase date",),
 }
-NAV_EXCLUDE = ("date",)  # "NAV Date" should not satisfy the "nav" value lookup
+NAV_EXCLUDE = ("date", "purchase")  # "NAV Date"/"Purchase NAV" vs the NAV value
 
 
 def _find_col(header, *keywords, exclude=()):
@@ -43,6 +45,55 @@ def absolute_return_pct(cost, market):
     if cost is None or market is None or cost <= 0:
         return None
     return (market - cost) / cost * 100.0
+
+
+def xirr(flows, tol=1e-9, max_iter=200):
+    """Annualized return (fraction) for [(date, amount), ...] using 365-day
+    discounting. Bisection on NPV, which is monotone in r for r > -1. Returns
+    None when the flows have no sign change (no valid rate)."""
+    if len(flows) < 2 or all(a > 0 for _, a in flows) or all(a < 0 for _, a in flows):
+        return None
+    d0 = min(d for d, _ in flows)
+    fs = [((d - d0).days, a) for d, a in flows]
+
+    def npv(rate):
+        return sum(a / (1 + rate) ** (days / 365.0) for days, a in fs)
+
+    lo, hi = -0.9999, max(1.0, abs(npv(-0.9999)) * 2)
+    if npv(lo) * npv(hi) > 0:
+        for _ in range(20):
+            lo *= 2  # widen; still fails if days==0 collapses
+        if npv(lo) * npv(hi) > 0:
+            return None
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2
+        v = npv(mid)
+        if abs(v) < tol:
+            return mid
+        if npv(lo) * v > 0:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def _day(s):
+    for fmt in ("%d-%m-%Y", "%d-%b-%Y"):
+        try:
+            return dt.datetime.strptime((s or "").strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _purchase_xirr(cost, market, purchase_s, nav_s):
+    """XIRR from one purchase + latest valuation. None when not authored."""
+    if cost is None or market is None or not purchase_s or not nav_s:
+        return None
+    pd, nd = _day(purchase_s), _day(nav_s)
+    if pd is None or nd is None or pd >= nd:
+        return None
+    return xirr([(pd, -cost), (nd, market)])
 
 
 def parse_mf_sheet(header, rows):
@@ -70,6 +121,13 @@ def parse_mf_sheet(header, rows):
             "nav": g("nav"),
             "market": market,
             "ret_pct": absolute_return_pct(cost, market),
+            "purchase_date": (r[c["purchase_date"]].strip()
+                              if c["purchase_date"] is not None else ""),
+            "xirr": _purchase_xirr(cost, market,
+                                   r[c["purchase_date"]].strip()
+                                   if c["purchase_date"] is not None else "",
+                                   r[c["nav_date"]].strip()
+                                   if c["nav_date"] is not None else ""),
         })
     return schemes, total
 

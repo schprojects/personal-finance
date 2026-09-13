@@ -1,10 +1,11 @@
 """Unit tests for holdings.py (investment sheet parsing and return calc)."""
+import datetime as dt
 import os
 import tempfile
 import unittest
 
 from holdings import (absolute_return_pct, household_value, is_mf_sheet,
-                      parse_investments, parse_label_rows, parse_mf_sheet)
+                      parse_investments, parse_label_rows, parse_mf_sheet, xirr)
 
 MF_HEADER = ["Folio No.", "ISIN", "Scheme Name", "Cost Value (INR)",
              "Unit Balance", "NAV Date", "NAV (INR)", "Market Value (INR)",
@@ -57,6 +58,52 @@ class TestAbsoluteReturn(unittest.TestCase):
     def test_not_computable(self):
         self.assertIsNone(absolute_return_pct(0, 250))
         self.assertIsNone(absolute_return_pct(None, 250))
+
+
+class TestXirr(unittest.TestCase):
+    def test_ten_pct_two_flows(self):
+        flows = [(dt.date(2021, 1, 1), -1000.0), (dt.date(2022, 1, 1), 1100.0)]
+        self.assertAlmostEqual(xirr(flows), 0.10, places=8)
+
+    def test_multi_flow(self):
+        # classic: -1000 @t0, +100 @t365, +1100 @t730 -> 10%
+        flows = [(dt.date(2021, 1, 1), -1000.0),
+                 (dt.date(2022, 1, 1), 100.0),
+                 (dt.date(2023, 1, 1), 1100.0)]
+        self.assertAlmostEqual(xirr(flows), 0.10, places=7)
+
+    def test_unsolvable_all_same_sign(self):
+        flows = [(dt.date(2021, 1, 1), 1000.0), (dt.date(2022, 1, 1), 1100.0)]
+        self.assertIsNone(xirr(flows))
+
+    def test_short_flows_None(self):
+        self.assertIsNone(xirr([(dt.date(2020, 1, 1), -100.0)]))
+
+
+class TestPurchaseDateColumns(unittest.TestCase):
+    HEADER = MF_HEADER + ["Purchase Date"]
+
+    def test_xirr_derived_from_purchase_date(self):
+        rows = [["9101/0", "INF1", "Axis Large Cap Fund", "24,00,000.000",
+                 "57,149.034", "11-Sep-2026", "68.69", "39,25,567.15",
+                 "KF", "01-01-2021"]]
+        schemes, _ = parse_mf_sheet(self.HEADER, rows)
+        s = schemes[0]
+        self.assertEqual(s["purchase_date"], "01-01-2021")
+        self.assertIsNotNone(s["xirr"])
+        self.assertGreater(s["xirr"], 0.05)
+
+    def test_no_purchase_date_no_xirr(self):
+        schemes, _ = parse_mf_sheet(MF_HEADER, MF_ROWS)
+        self.assertEqual(schemes[0]["purchase_date"], "")
+        self.assertIsNone(schemes[0]["xirr"])
+
+    def test_never_reads_purchase_nav_as_nav(self):
+        header = MF_HEADER + ["Purchase NAV (INR)"]
+        data = [["9101/0", "INF1", "X", "1000", "10", "11-Sep-2026", "120",
+                 "1200", "KF", "12.5"]]
+        schemes, _ = parse_mf_sheet(header, data)
+        self.assertEqual(schemes[0]["nav"], 120)  # not 12.5
 
 
 class TestParseInvestments(unittest.TestCase):

@@ -68,6 +68,14 @@ def frame(rows):
     return agg
 
 
+_INTERNAL = ("transfer", "investment", "refund", "reimbursed")
+
+
+def incoming(rows):
+    """Deposits that fund spending: income/credit, excluding internal moves."""
+    return [r for r in rows if r["dep"] > 0 and r["kind"] not in _INTERNAL]
+
+
 # --------------------------------------------------------------------------
 # shared sidebar filters
 # --------------------------------------------------------------------------
@@ -144,6 +152,42 @@ def page_overview(rows, f):
         fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), showlegend=True)
         st.plotly_chart(fig, width="stretch")
 
+    inc = incoming(filtered(rows, f))
+    inc_fy, spend_fy = {}, {}
+    for r in inc:
+        inc_fy[r["fy"]] = inc_fy.get(r["fy"], 0.0) + r["dep"]
+    for (fy, _), v in agg.items():
+        spend_fy[fy] = spend_fy.get(fy, 0.0) + v
+    fys = sorted(set(fy for (fy, _) in agg) | set(inc_fy))
+    inc_t = sum(inc_fy.values())
+    spend_t = sum(spend_fy.values())
+    c1, c2 = st.columns([2, 1])
+    if fys:
+        fig = go.Figure()
+        fig.add_bar(x=fys, y=[inc_fy.get(fy, 0.0) for fy in fys], name="Incoming")
+        fig.add_bar(x=fys, y=[spend_fy.get(fy, 0.0) for fy in fys], name="Net spend")
+        fig.update_layout(height=360, barmode="group", xaxis_title="Financial year",
+                          yaxis_title="₹", yaxis_tickformat="~s", margin=dict(t=10))
+        c1.plotly_chart(fig, width="stretch")
+    c2.metric("Incoming", inr(inc_t))
+    c2.metric("Net spend", inr(spend_t))
+    c2.metric("Savings rate", f"{100 * (inc_t - spend_t) / inc_t:.0f}%"
+              if inc_t > 0 else "—",
+              delta=f"{inr(inc_t - spend_t)} saved")
+    if focus:
+        cum, run = {}, 0.0
+        for r in sorted(spend, key=lambda x: x["ym"]):
+            if r["fy"] != focus:
+                continue
+            run += r["wd"] - (r["dep"] if r["kind"] == "refund" else 0)
+            cum[r["ym"]] = run
+        xs = sorted(cum)
+        fig = px.line(x=xs, y=[cum[k] for k in xs], markers=True,
+                      title=f"Cumulative spend — {focus}")
+        fig.update_layout(height=320, xaxis_title="Month", yaxis_title="₹",
+                          yaxis_tickformat="~s", margin=dict(t=40))
+        st.plotly_chart(fig, width="stretch")
+
 
 def page_holdings(assets):
     st.markdown("##### Holdings — as authored in the members' investment CSVs (view-only)")
@@ -170,7 +214,11 @@ def page_holdings(assets):
                     f"{name}: sheets' stated Total ({inr(entry['total'])}) ≠ "
                     f"Σ rows ({inr(rows_sum)})")
         if entry["schemes"]:
-            st.caption("Mutual funds / schemes (absolute return = latest value vs cost)")
+            has_xirr = any(s["xirr"] is not None for s in entry["schemes"])
+            st.caption(
+                "Mutual funds / schemes (absolute return = latest vs cost; "
+                "XIRR shown when the sheet authors a Purchase Date)" if has_xirr
+                else "Mutual funds / schemes (absolute return = latest vs cost)")
             tbl = [{
                 "Scheme": s["scheme"][:60], "Folio": s["folio"],
                 "Units": (f"{s['units']:,.4f}" if s["units"] is not None else ""),
@@ -179,6 +227,8 @@ def page_holdings(assets):
                 "Value at cost": inr(s["cost"]) if s["cost"] is not None else "—",
                 "Value latest": inr(s["market"]) if s["market"] is not None else "—",
                 "Return": (f"{s['ret_pct']:+.1f}%" if s["ret_pct"] is not None else "—"),
+                "XIRR (ann.)": (f"{s['xirr'] * 100:+.1f}%"
+                                if s["xirr"] is not None else "—"),
             } for s in entry["schemes"]]
             st.dataframe(tbl, width="stretch", hide_index=True,
                          height=min(400, 35 * len(tbl) + 40))
@@ -199,6 +249,17 @@ def page_holdings(assets):
     fig = px.pie(names=list(agg), values=list(agg.values()), hole=0.45)
     fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), showlegend=True)
     st.plotly_chart(fig, width="stretch")
+
+    schemes = [(f"{name.title()}: {s['scheme']}", s["market"] or s["cost"] or 0)
+               for name, e in assets.items() for s in e["schemes"]]
+    schemes.sort(key=lambda kv: -kv[1])
+    top = schemes[:10]
+    if top:
+        fig = px.bar(x=[k[:40] for k, _ in top], y=[v for _, v in top],
+                     title="Largest schemes", labels={"x": "", "y": "₹"})
+        fig.update_layout(height=320, yaxis_tickformat="~s",
+                          xaxis_tickangle=-30, margin=dict(t=40))
+        st.plotly_chart(fig, width="stretch")
 
 
 def page_transactions(rows, f):
@@ -295,6 +356,12 @@ def page_review(rows, f):
     st.plotly_chart(fig, width="stretch")
     pick = st.selectbox("Inspect payee", [k for k, _ in grp], key="revpick")
     rows_p = [r for r in rev if r["payee"] == pick]
+    if rows_p and rows_p[0]["part"]:
+        kw = rows_p[0]["part"].split("/")[1] if "/" in rows_p[0]["part"] else None
+        if kw:
+            st.code(f"expense,CATEGORY,{kw}", language=None,
+                    caption="paste into rules.txt to auto-classify this payee, "
+                            "then re-run classify.py")
     st.dataframe(
         [{"Date": r["date_s"], "Particulars": r["part"][:120],
           "Amount": r["wd"]} for r in rows_p],
