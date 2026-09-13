@@ -12,31 +12,12 @@ import yaml
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
-# Category display labels (id == label except these pretty names).
-CATEGORY_LABELS = {
-    "family": "Family support", "home": "Home & maintenance",
-    "utilities": "Utilities", "comms": "Internet & phone",
-    "kids": "Kids & school", "learning": "Learning & upskilling",
-    "digital": "Subscriptions & digital", "health": "Healthcare & pharmacy",
-    "transport": "Transport & fuel", "travel": "Travel & leisure",
-    "grocery": "Groceries", "dining": "Dining out",
-    "shopping": "Shopping & goods", "insurance": "Insurance",
-    "legal": "Legal & professional", "donation": "Donations & gifts",
-    "tax": "Income tax", "bills": "Bills & aggregators",
-    "misc": "Misc & small", "cars": "Vehicles", "loan": "Loan & EMI",
-}
-
 KINDS = ["expense", "refund", "review", "income", "investment", "transfer",
          "reimbursed", "charge", "cash", "credit"]
 
 # Daily-spend baseline hides these in the dashboard.
 BASELINE_EXCLUDED = {"Income tax", "Vehicles", "Loan & EMI",
                      "Bank & DP charges", "Misc & small"}
-
-
-def cat_label(k):
-    """Internal category id (e.g. 'grocery') -> human label."""
-    return CATEGORY_LABELS.get(k, k)
 
 
 def load_members():
@@ -68,17 +49,15 @@ def inr(x):
     return ("-" if neg else "") + "₹" + head + "." + s[1]
 
 
-def fy_of(d, is_date=True):
+def fy_of(d):
     """FY label from a date, e.g. 2017-04-01 -> '2017-18'."""
-    if not is_date:
-        d = dt.datetime.strptime(d, "%d-%m-%Y").date()
     yy = d.year if d.month >= 4 else d.year - 1
     return f"{yy}-{str(yy + 1)[-2:]}"
 
 
 def fy_of_str(date_s):
     """FY label from a dd-mm-yyyy string."""
-    return fy_of(dt.datetime.strptime(date_s, "%d-%m-%Y").date(), False)
+    return fy_of(dt.datetime.strptime(date_s, "%d-%m-%Y").date())
 
 
 def payee_key(p):

@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Classify ICICI bank statement exports into expense categories.
 
-Usage: python3 classify.py [statement1.csv statement2.csv ...]
-Defaults to all *.csv/*.CSV in this directory except known outputs.
+Usage: python3 classify.py
+
+Reads every member's statements (via members.yaml), tags each row, and writes
+numbered runs. Raw data files are never touched:
+
+  output/classified-<N>.csv        every classified row (all members)
+  output/review-<N>.csv            rows still needing a human ruling
+  output/<FY>/classified-<N>.csv   per-FY slices of the run
+  repo/classified-main-<N>.csv     consolidated inventory the app reads
+
+N = 1 + highest run number already in output/ so re-runs never clobber.
 Excludes investments / income / transfers / reimbursables from expenses.
 """
 import csv
-import glob
 import os
 import re
 import sys
+
+from common import fy_of_str, inr, load_members, money, payee_key, statements_for
 
 
 # --------------------------------------------------------------------------
@@ -359,23 +369,6 @@ RULES = [
 ]
 
 
-def money(s):
-    s = (s or "").strip().replace(",", "")
-    return float(s) if s else 0.0
-
-
-def inr(x):
-    neg = x < 0
-    x = abs(x)
-    s = f"{x:.2f}".split(".")
-    head = s[0]
-    if len(head) > 3:
-        last3 = head[-3:]
-        rest = re.sub(r"\B(?=(\d{2})+(?!\d))", ",", head[:-3])
-        head = rest + "," + last3
-    return ("-" if neg else "") + "₹" + head + "." + s[1]
-
-
 def parse_blocks(path):
     """Yield (account, [tx dicts]) blocks from one statement CSV."""
     with open(path, newline="") as f:
@@ -447,10 +440,10 @@ _MANUAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual.
 if os.path.exists(_MANUAL_PATH):
     with open(_MANUAL_PATH, newline="") as f:
         for r in csv.DictReader(f):
-            MANUAL[(str(r.get("DATE","")).strip(),
-                    (r.get("PARTICULARS","") or "").strip().upper(),
-                    float(r.get("AMOUNT") or 0))] = (r.get("KIND","").strip(),
-                                                      r.get("CATEGORY","").strip())
+            MANUAL[(str(r.get("DATE", "")).strip(),
+                    (r.get("PARTICULARS", "") or "").strip().upper(),
+                    float(r.get("AMOUNT") or 0))] = (r.get("KIND", "").strip(),
+                                                     r.get("CATEGORY", "").strip())
 
 
 def tag(part, mode, amt=0.0):
@@ -469,28 +462,6 @@ def tag(part, mode, amt=0.0):
 MISC_MIN = 1000.0  # ponytail: payees totalling less than this/yr of spend -> "Misc & small"
 
 
-def payee_key(p):
-    """Coarse merchant id for lumping/long-tail decisions."""
-    if p.startswith("UPI/"):
-        m = re.search(r"([A-Za-z0-9._@-]+@[A-Za-z]+)", p)
-        return "UPI:" + (m.group(1).split("@")[0] if m else p.split("/")[1])
-    t = p.split("/")
-    if p.startswith(("VPS/", "IPS/", "VSI/")):
-        return t[0] + ":" + t[1]
-    if p.startswith("BIL/"):
-        return "BIL:" + (t[2] if len(t) > 2 else "?")
-    if p.startswith("MMT/"):
-        m = re.search(r"([A-Za-z0-9._@-]+@[A-Za-z]+)", p)
-        if m:
-            return "MMT:" + m.group(1).split("@")[0]
-        return "MMT:" + (t[-1] if len(t) > 1 else "?")
-    if p.startswith(("NEFT-", "RTGS-")):
-        return "BANK:" + p[:25]
-    if p.startswith("VIN/") or p.startswith("GIB/"):
-        return p.split("/")[0] + ":" + p.split("/")[1]
-    return "OTHER:" + p[:24]
-
-
 def bucket_long_tail(rows):
     rev = [r for r in rows if r["kind"] == "review"]
     totals = {}
@@ -501,137 +472,88 @@ def bucket_long_tail(rows):
             r["kind"], r["category"] = "expense", "Misc & small"
 
 
-def fy_of(date):
-    """FY label from a dd-mm-yyyy date, e.g. 01-04-2017 -> 2017-18."""
-    d, m, y = date.split("-")
-    yy = int(y) if int(m) >= 4 else int(y) - 1
-    return f"{yy}-{str(yy + 1)[-2:]}"
+# --------------------------------------------------------------------------
+# output writers
+# --------------------------------------------------------------------------
+COLUMNS = ["MEMBER", "FILE", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
+           "DEPOSIT", "WITHDRAWAL", "BALANCE", "KIND", "CATEGORY", "FY"]
+_ROW_KEY = {"PARTICULARS": "part", "DEPOSIT": "dep", "WITHDRAWAL": "wd",
+            "BALANCE": "bal", "MEMBER": "member", "FILE": "file",
+            "ACCOUNT": "account", "DATE": "date", "MODE": "mode",
+            "KIND": "kind", "CATEGORY": "category", "FY": "fy"}
+
+REVIEW_COLUMNS = ["MEMBER", "FILE", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
+                  "WITHDRAWAL", "BALANCE"]
 
 
-def summarize(rows):
-    expense = [r for r in rows if r["kind"] == "expense"]
-    refunds = [r for r in rows if r["kind"] == "refund"]
-    by_cat = {}
-    for r in expense:
-        by_cat[r["category"]] = by_cat.get(r["category"], 0.0) + r["wd"]
-    for r in refunds:
-        c = tag(r["part"], r["mode"], r["dep"] or r["wd"])[1] or "Refunds"
-        by_cat[c] = by_cat.get(c, 0.0) - (r["dep"] or 0.0)
-    monthly = {}
-    for r in expense:
-        ym = r["date"][-7:]
-        monthly[ym] = monthly.get(ym, 0.0) + r["wd"]
-    for r in refunds:
-        ym = r["date"][-7:]
-        monthly[ym] = monthly.get(ym, 0.0) - (r["dep"] or 0.0)
-    kinds = {}
-    for r in rows:
-        if r["kind"] in ("expense", "review"):
-            continue
-        kinds[r["kind"]] = kinds.get(r["kind"], 0.0) + r["wd"] + r["dep"]
-    return {
-        "expense": len(expense), "refund": len(refunds),
-        "n_review": sum(1 for r in rows if r["kind"] == "review"),
-        "by_cat": by_cat, "monthly": monthly, "kinds": kinds,
-        "net": sum(by_cat.values()),
-    }
+def next_run_number():
+    """1 + max run number already in output/, or 1."""
+    if not os.path.isdir("output"):
+        return 1
+    n = 0
+    for name in os.listdir("output"):
+        m = re.fullmatch(r"classified-(\d+)\.csv", name)
+        if m:
+            n = max(n, int(m.group(1)))
+    return n + 1
 
 
-def write_folder_outputs(dr, rows):
+def _row(r):
+    return [r[_ROW_KEY[k]] for k in COLUMNS]
+
+
+def write_run(n, rows):
+    """Numbered run files under output/ + per-FY slices + repo/ inventory."""
+    os.makedirs("output", exist_ok=True)
+
     review = [r for r in rows if r["kind"] == "review"]
-    s = summarize(rows)
-    with open(os.path.join(dr, "classified.csv"), "w", newline="") as f:
+    with open(os.path.join("output", f"classified-{n}.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["FILE", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
-                    "DEPOSIT", "WITHDRAWAL", "BALANCE", "KIND", "CATEGORY"])
+        w.writerow(COLUMNS)
         for r in sorted(rows, key=lambda r: r["date"]):
-            w.writerow([r["file"], r["account"], r["date"], r["mode"], r["part"],
-                        r["dep"], r["wd"], r["bal"], r["kind"], r["category"]])
-    with open(os.path.join(dr, "review_me.csv"), "w", newline="") as f:
+            w.writerow(_row(r))
+    with open(os.path.join("output", f"review-{n}.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["FILE", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
-                    "WITHDRAWAL", "BALANCE"])
+        w.writerow(REVIEW_COLUMNS)
         for r in review:
-            w.writerow([r["file"], r["account"], r["date"], r["mode"],
+            w.writerow([r["member"], r["file"], r["account"], r["date"], r["mode"],
                         r["part"], r["wd"], r["bal"]])
-    with open(os.path.join(dr, "expense_summary.csv"), "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["SECTION", "NAME", "AMOUNT"])
-        for c, v in sorted(s["by_cat"].items(), key=lambda kv: -abs(kv[1])):
-            if abs(v) > 0.01:
-                w.writerow(["category", c, f"{v:.2f}"])
-        for ym in sorted(s["monthly"]):
-            if abs(s["monthly"][ym]) > 0.01:
-                w.writerow(["month", ym, f"{s['monthly'][ym]:.2f}"])
-        for k, v in sorted(s["kinds"].items()):
-            w.writerow([f"excluded:{k}", "", f"{v:.2f}"])
-        w.writerow(["excluded:refund_net", "",
-                    f"-{sum(r['dep'] for r in rows if r['kind'] == 'refund'):.2f}"])
-        w.writerow(["TOTAL_EXPENSE", "net of refunds", f"{s['net']:.2f}"])
 
-
-def write_aggregate(by_fy, net_total):
-    with open("expense_summary_all_years.csv", "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["FY", "SECTION", "NAME", "AMOUNT"])
-        for fy in sorted(by_fy):
-            s = by_fy[fy]
-            w.writerow([fy, "total", "net expense", f"{s['net']:.2f}"])
-            w.writerow([fy, "n_review", "", s["n_review"]])
-            for c, v in sorted(s["by_cat"].items(), key=lambda kv: -abs(kv[1])):
-                if abs(v) > 0.01:
-                    w.writerow([fy, "category", c, f"{v:.2f}"])
-            for ym in sorted(s["monthly"]):
-                if abs(s["monthly"][ym]) > 0.01:
-                    w.writerow([fy, "month", ym, f"{s['monthly'][ym]:.2f}"])
-        w.writerow(["ALL", "grand_total", "net expense", f"{net_total:.2f}"])
-        if by_fy:
-            w.writerow(["ALL", "avg_per_fy", "net expense",
-                        f"{net_total / len(by_fy):.2f}"])
-
-
-def find_inputs(args):
-    outs = {"classified.csv", "review_me.csv", "expense_summary.csv",
-            "expense_summary_all_years.csv"}
-    if args:
-        return args
-    files = []
-    for pat in ("*.csv", "*.CSV", "**/*.csv", "**/*.CSV"):
-        files += glob.glob(pat, recursive=True)
-    seen, keep = set(), []
-    for p in sorted(files, key=os.path.normcase):
-        if p in seen:
-            continue
-        seen.add(p)
-        if os.path.basename(p).lower() in outs or os.path.dirname(p) == "":
-            continue  # outputs and root-level CSVs
-        keep.append(p)
-    return keep
-
-
-def review_by_payee(rows):
-    agg = {}
-    for r in rows:
-        if r["kind"] != "review":
-            continue
-        k = payee_key(r["part"])
-        a = agg.setdefault(k, [0, 0.0])
-        a[0] += 1
-        a[1] += r["wd"]
-    return sorted(agg.items(), key=lambda kv: -kv[1][1])
-
-
-def main():
-    by_dir = {}
     by_fy = {}
+    for r in rows:
+        by_fy.setdefault(r["fy"], []).append(r)
+    for fy, fr in sorted(by_fy.items()):
+        os.makedirs(os.path.join("output", fy), exist_ok=True)
+        with open(os.path.join("output", fy, f"classified-{n}.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(COLUMNS)
+            for r in sorted(fr, key=lambda r: r["date"]):
+                w.writerow(_row(r))
+
+    os.makedirs("repo", exist_ok=True)
+    with open(os.path.join("repo", f"classified-main-{n}.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(COLUMNS)
+        for r in sorted(rows, key=lambda r: (r["fy"], r["date"])):
+            w.writerow(_row(r))
+    return by_fy
+
+
+# --------------------------------------------------------------------------
+def main():
+    members = load_members()
+    if not members:
+        sys.exit("members.yaml has no members")
+
     all_rows = []
     ok_all = True
-    for path in find_inputs(sys.argv[1:]):
+    for member, path in statements_for(members):
         for acct, txs in parse_blocks(path):
             opening, ok, msg, txs = reconcile(acct, txs)
             if not ok:
                 ok_all = False
-            print(f"{path}  [{acct}]  {msg}  -> {'PASS' if ok else 'FAIL'}")
+            print(f"{member['name']:>9}  {os.path.relpath(path)}  [{acct}]  {msg}  "
+                  f"{'PASS' if ok else 'FAIL'}")
             if not ok:
                 continue
             for t in txs:
@@ -643,43 +565,27 @@ def main():
                     kind, cat = tag(t["part"], t["mode"], amt)
                 if t["dep"] > 0 and t["wd"] == 0 and kind in ("expense", "review"):
                     kind, cat = "credit", ""  # deposits aren't expenses
-                t.update(file=os.path.basename(path), account=acct,
-                         kind=kind, category=cat, fy=fy_of(t["date"]))
-                by_dir.setdefault(os.path.dirname(path) or ".", []).append(t)
-                by_fy.setdefault(t["fy"], []).append(t)
+                t.update(member=member["name"], file=os.path.basename(path), account=acct,
+                         kind=kind, category=cat, fy=fy_of_str(t["date"]))
                 all_rows.append(t)
 
     if not ok_all:
         sys.exit(1)  # at least one block failed reconciliation; totals unsafe
 
     bucket_long_tail(all_rows)
-    top_review = review_by_payee(all_rows)
-
-    stats = {fy: summarize(rows) for fy, rows in sorted(by_fy.items())}
-    for dr, rows in sorted(by_dir.items()):
-        write_folder_outputs(dr, rows)
-
-    net_total = sum(s["net"] for s in stats.values())
-    reviewed_total = sum(s["n_review"] for s in stats.values())
-    write_aggregate(stats, net_total)
+    n = next_run_number()
+    by_fy = write_run(n, all_rows)
 
     print()
-    print(f"FY".ljust(10) + f"{'net exp':>13}  {'*tx':>5} {'rev':>4}")
-    for fy, s in stats.items():
-        n = len(by_fy[fy])
-        print(f"{fy:<10}{inr(s['net']):>13} {n:>5} {s['n_review']:>4}")
-    print(f"{'TOTAL':<10}{inr(net_total):>13}")
-    if stats:
-        print(f"{'AVG/FY':<10}{inr(net_total / len(stats)):>13}")
-        print(f"{'REVIEW':<10}{reviewed_total:>18}")
-    if top_review:
-        print()
-        print(f"TOP REVIEW PAYEES (unclassified debits, {len(top_review)} payees):")
-        for k, (n, v) in top_review[:40]:
-            print(f"  {k:<28} n={n:>4}  {inr(v)}")
-    print()
-    print("Wrote: per-folder classified.csv / review_me.csv / expense_summary.csv")
-    print("       + expense_summary_all_years.csv (root)")
+    net = sum(r["wd"] - r["dep"] for r in all_rows if r["kind"] in ("expense", "refund"))
+    n_review = sum(1 for r in all_rows if r["kind"] == "review")
+    print(f"run #{n}: {len(all_rows)} rows, {len(by_fy)} FYs")
+    for fy, fr in sorted(by_fy.items()):
+        fy_net = sum(r["wd"] - r["dep"] for r in fr if r["kind"] in ("expense", "refund"))
+        print(f"  {fy:<10} {len(fr):>5} rows  net {inr(fy_net)}")
+    print(f"  review: {n_review} rows")
+    print(f"wrote output/classified-{n}.csv, output/review-{n}.csv, "
+          f"output/<FY>/classified-{n}.csv, repo/classified-main-{n}.csv")
 
 
 if __name__ == "__main__":
