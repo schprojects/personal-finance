@@ -300,6 +300,12 @@ def page_categories(rows, f):
     pick = st.selectbox("Category", cats, key="pickcat")
     rs = [r for r in filtered(rows, f) if r["category"] == pick]
     agg = frame(rs)
+    total = sum(agg.values())
+    all_spend = sum(1.0 * v for (fy, _), v in frame(filtered(rows, f)).items())
+    c1, c2 = st.columns(2)
+    c1.metric(f"Total — {pick}", inr(total))
+    c2.metric("Share of filtered spend",
+              f"{100 * total / all_spend:.1f}%" if all_spend else "—")
 
     fig = go.Figure()
     for fy in sorted({k[0] for k in agg}):
@@ -318,20 +324,13 @@ def page_categories(rows, f):
         elif r["kind"] == "refund":
             pa[r["payee"]] = pa.get(r["payee"], 0.0) - r["dep"]
     pa = {k: v for k, v in pa.items() if abs(v) > 0.01}
-    c1, c2 = st.columns([1, 1])
     top = sorted(pa.items(), key=lambda kv: -abs(kv[1]))[:12]
     if top:
         fig = px.bar(x=[k for k, _ in top], y=[v for _, v in top],
                      labels={"x": "Payee", "y": "₹"})
         fig.update_layout(yaxis_tickformat="~s", margin=dict(t=10, b=40),
                           xaxis_tickangle=-30, height=360)
-        c1.plotly_chart(fig, width="stretch")
-    near = sorted(pa.items(), key=lambda kv: -abs(kv[1]))[:12]
-    if near:
-        c2.dataframe(
-            [{"Payee": k, "Amount": inr(v)} for k, v in near],
-            width="stretch", height=360, hide_index=True,
-        )
+        st.plotly_chart(fig, width="stretch")
 
 
 def page_review(rows, f):
@@ -359,9 +358,9 @@ def page_review(rows, f):
     if rows_p and rows_p[0]["part"]:
         kw = rows_p[0]["part"].split("/")[1] if "/" in rows_p[0]["part"] else None
         if kw:
-            st.code(f"expense,CATEGORY,{kw}", language=None,
-                    caption="paste into rules.txt to auto-classify this payee, "
-                            "then re-run classify.py")
+            st.code(f"expense,CATEGORY,{kw}")
+            st.caption("paste into rules.txt to auto-classify this payee, "
+                       "then re-run classify.py")
     st.dataframe(
         [{"Date": r["date_s"], "Particulars": r["part"][:120],
           "Amount": r["wd"]} for r in rows_p],
