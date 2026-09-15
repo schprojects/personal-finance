@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Classification rules - external, human-authored rules.txt.
+"""Classification rules - external, human-authored rules.txt (legacy) and,
+since the database spec, manual-rules.csv / auto-rules.csv.
 
-Syntax of rules.txt (first matching line wins):
-    KIND,CATEGORY,<keyword keyword...> [@mode:<M>] [@amt<=<n>|@amt><n>]
+Syntax of a rules file (first matching line wins):
+    KIND,CATEGORY,<keywords> [@mode:<M>] [@amt<=<n>|@amt><n>]
   KIND       income|investment|transfer|reimbursed|refund|charge|expense
   CATEGORY   display category; non-empty always classifies as an expense
-  keywords   PARTICULARS (uppercased) must contain ANY of these words
+  keywords   PARTICULARS (uppercased) must contain ANY of these words,
+             '|' = any-of; a trailing space is a sentinel ("REF " != "REFILL")
   @mode:<M>  restrict to row MODE == M (uppercased)
   @amt<=<n>  amount must be <= n     @amt><n>  amount must be > n
-Lines starting with '#' are comments. The rules were migrated from the
-beloved RULES table; adding a line while looking at output/review-<N>.csv
-(see review.py) is the supported way to shrink the review file.
+Lines starting with '#' are comments. .txt files are parsed line-by-line;
+.csv files via the csv module (KIND,CATEGORY,EXPRESSION per row).
+Rule precedence is manual-rules.csv first, then auto-rules.csv
+(RuleSet.combined).
 
 Amount = the row's outgoing amount (withdrawal, or deposit if none).
 """
@@ -67,8 +70,34 @@ class RuleSet:
 
     @classmethod
     def from_file(cls, path):
+        if str(path).lower().endswith(".csv"):
+            return cls.from_csv(path)
         with open(path) as f:
             return cls.parse(f.read())
+
+    @classmethod
+    def from_csv(cls, path):
+        """Rules from KIND,CATEGORY,EXPRESSION rows (manual- or auto-rules.csv)."""
+        rules = []
+        with open(path, newline="") as f:
+            for row in csv.reader(f):
+                if not row or not row[0].strip() or row[0].lstrip().startswith("#"):
+                    continue
+                if len(row) < 3:
+                    raise ValueError(
+                        f"rules file: need KIND,CATEGORY,EXPR -> {','.join(row)!r}")
+                rules.append(_rule_from_expr(row[0].strip().lower(),
+                                             row[1].strip(), row[2]))
+        return cls(rules)
+
+    @classmethod
+    def combined(cls, manual_path=None, auto_path=None):
+        """Manual rules first (highest precedence), then auto rules."""
+        rules = []
+        for p in (manual_path, auto_path):
+            if p and os.path.exists(p):
+                rules += cls.from_csv(p).rules
+        return cls(rules)
 
     def match(self, part, mode, amt=0.0):
         """(kind, category), or None when no rule fires (goes to review)."""
@@ -130,12 +159,14 @@ def _suggest_keyword(sample):
 def parse_line(line):
     fields = line.split(",")
     if len(fields) < 3:
-        raise ValueError(f"rules.txt: need KIND,CATEGORY,EXPR -> {line!r}")
-    kind = fields[0].strip().lower()
-    category = fields[1].strip()
+        raise ValueError(f"rules file: need KIND,CATEGORY,EXPR -> {line!r}")
+    return _rule_from_expr(fields[0].strip().lower(), fields[1].strip(), fields[2])
+
+
+def _rule_from_expr(kind, category, expr):
     # Everything before the first '@' is the keyword clause, kept verbatim
     # (a trailing space is a sentinel, e.g. "REF " must not match "REFILL").
-    parts = re.split(r"(?:\s+|^)@", fields[2])
+    parts = re.split(r"(?:\s+|^)@", expr)
     keywords = [kw for kw in parts[0].split("|") if kw]
     mode = amt_min = amt_max = None
     for q in parts[1:]:
@@ -147,5 +178,5 @@ def parse_line(line):
         elif q.startswith("amt>"):
             amt_min = float(q[4:])
         else:
-            raise ValueError(f"rules.txt: unknown qualifier {q!r}")
+            raise ValueError(f"rules file: unknown qualifier {q!r}")
     return Rule(kind, category, keywords, mode, amt_min, amt_max)

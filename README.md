@@ -136,8 +136,10 @@ writer; the dashboard reads and edits it.
 | File | Purpose |
 |---|---|
 | `common.py` | shared helpers |
-| `rules.py` | rule language (Rule / RuleSet) for `rules.txt` |
+| `rules.py` | rule language (Rule / RuleSet) for `rules.txt`, `auto-rules.csv`, `manual-rules.csv` |
+| `auto-rules.csv` | LLM/generated rules (seeded from `rules.txt`, appended in auto mode) |
 | `classify.py` | legacy CSV classifier (retired when `impex.py` lands) |
+| `scripts/seed_auto_rules.py` | regenerates `auto-rules.csv` from `rules.txt` (equivalence-checked) |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `app.py` | streamlit dashboard (view-only) |
 | `holdings.py` | investment sheet parser + XIRR |

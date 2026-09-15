@@ -6,6 +6,15 @@ import unittest
 from rules import Rule, RuleSet, RuleSuggester, parse_line
 
 
+CSV_RULES = (
+    "# comment first row\n"
+    "expense,Bank & DP charges,@mode:BANK CHARGES\n"
+    "expense,Transport & fuel,[MERCHANT]|[MERCHANT] @amt<=10000\n"
+    'refund,,"REF "\n'
+    "income,,INT.PD\n"
+)
+
+
 class TestParseLine(unittest.TestCase):
     def test_simple_keyword(self):
         r = parse_line("expense,Groceries,[MERCHANT]")
@@ -61,6 +70,50 @@ class TestMatch(unittest.TestCase):
 
     def test_empty_category_classifies_as_non_expense(self):
         self.assertEqual(Rule("investment", "", ("EBA/MF",)).match("EBA/MF-1", ""), True)
+
+
+class TestCsvRules(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.csv = os.path.join(self.d.name, "auto-rules.csv")
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def write(self, text):
+        with open(self.csv, "w", newline="") as f:
+            f.write(text)
+
+    def test_csv_parses_like_txt(self):
+        self.write(CSV_RULES)
+        txt = RuleSet.parse("".join(
+            l + "\n" for l in CSV_RULES.splitlines() if l and not l.startswith("#")))
+        csv_rs = RuleSet.from_csv(self.csv)
+        self.assertEqual([r.kind for r in csv_rs.rules], [r.kind for r in txt.rules])
+        self.assertEqual(csv_rs.match("UPI/chelvaya@ok", "", 500),
+                         ("expense", "Transport & fuel"))
+        self.assertEqual(csv_rs.match("REF [MERCHANT]", ""), ("refund", ""))
+        kw = [r.keywords for r in csv_rs.rules]
+        self.assertIn(("REF ",), kw)  # sentinel survives csv round-trip
+
+    def test_from_file_selects_parser(self):
+        self.write(CSV_RULES)
+        self.assertEqual(len(RuleSet.from_file(self.csv).rules), 4)
+        # parse-path fallback (rules.txt is gitignored, so only when present)
+        if os.path.exists("rules.txt"):
+            self.assertGreater(len(RuleSet.from_file("rules.txt").rules), 100)
+
+    def test_combined_manual_first(self):
+        self.write(CSV_RULES)
+        manual = os.path.join(self.d.name, "manual-rules.csv")
+        with open(manual, "w", newline="") as f:
+            f.write("expense,Specific,BANK CHARGES\n")  # wants to win
+        rs = RuleSet.combined(manual, self.csv)
+        self.assertEqual(rs.match("BANK CHARGES", ""),
+                         ("expense", "Specific"))  # manual wins, no mode gate
+        rs2 = RuleSet.combined(None, self.csv)
+        self.assertEqual(rs2.match("x", "BANK CHARGES", 1_000_000),
+                         ("expense", "Bank & DP charges"))
 
 
 class TestSuggestions(unittest.TestCase):
