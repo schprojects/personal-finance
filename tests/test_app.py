@@ -48,6 +48,17 @@ APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                    "personal-finance.py")
 
 
+def make_zero_db(path):
+    b = FinanceBackend(path=path)
+    b.seed_members([{"name": "a", "data_dir": "data/a"}])
+    b.set_password("a", "pw")
+    with b.con:
+        b.upsert_bank_entry("a", account="A", date="2024-04-01", mode="NEFT",
+                            particulars="ACH/SALARY", deposit=1000, withdrawal=0,
+                            balance=1000, kind="income", category="", file="s")
+    b.close()
+
+
 class TestDashboardPages(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.TemporaryDirectory()
@@ -112,6 +123,15 @@ class TestDashboardPages(unittest.TestCase):
             at.run()
             at.button(key="logout").click().run()
             self.assertFalse(at.exception)
+
+    def test_slider_survives_zero_withdrawals(self):
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}) as _:
+            zd = os.path.join(self.d.name, "zero.db")
+            make_zero_db(zd)
+            with mock.patch.dict(os.environ, {"FINANCE_DB": zd}):
+                at = self._at()
+                at.run()
+                self.assertFalse(at.exception)
 
 
 if __name__ == "__main__":

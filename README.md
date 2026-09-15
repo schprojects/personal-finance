@@ -174,6 +174,15 @@ Dashboard sessions ride a same-Site `stmtok` cookie bridged through `st.html`
 with `unsafe_allow_javascript=True` (Streamlit has no cookie API), validated
 server-side; `Sign out` revokes the token.
 
+To use a specific database (any copy you keep elsewhere, or a backup),
+export its path before running the app or any `impex.py` subcommand —
+both then read and write that file instead of `var/networth.db`:
+
+```sh
+export FINANCE_DB=/path/to/networth.db
+.venv/bin/streamlit run personal-finance.py
+```
+
 ## Files tracked in git
 
 | File | Purpose |

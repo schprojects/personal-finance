@@ -10,3 +10,4 @@ var/
 backup/
 dist/
 dist.zip
+[DB-FOLDER]/

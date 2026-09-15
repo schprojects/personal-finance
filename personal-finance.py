@@ -144,7 +144,7 @@ def sidebar_filters(rows):
     cats = sorted({r["category"] for r in rows if r["kind"] in ("expense", "refund")})
     kinds = sorted({r["kind"] for r in rows})
     accts = sorted({r["mode"] for r in rows if r["mode"]})
-    maxwd = int(max(r["wd"] for r in rows) or 1)
+    maxwd = max(2, int(max(r["wd"] for r in rows) or 1))
     with st.sidebar:
         fys = st.multiselect("Financial years", fis, key="fys",
                              default=list(fis))
@@ -245,11 +245,12 @@ def page_overview(rows, f):
             run += r["wd"] - (r["dep"] if r["kind"] == "refund" else 0)
             cum[r["ym"]] = run
         xs = sorted(cum)
-        fig = px.line(x=xs, y=[cum[k] for k in xs], markers=True,
-                      title=f"Cumulative spend — {focus}")
-        fig.update_layout(height=320, xaxis_title="Month", yaxis_title="₹",
-                          yaxis_tickformat="~s", margin=dict(t=40))
-        st.plotly_chart(fig, width="stretch")
+        if xs:
+            fig = px.line(x=xs, y=[cum[k] for k in xs], markers=True,
+                          title=f"Cumulative spend — {focus}")
+            fig.update_layout(height=320, xaxis_title="Month", yaxis_title="₹",
+                              yaxis_tickformat="~s", margin=dict(t=40))
+            st.plotly_chart(fig, width="stretch")
 
 
 def page_transactions(rows, f):
