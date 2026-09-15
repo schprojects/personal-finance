@@ -32,9 +32,9 @@ class TestPayeeKey(unittest.TestCase):
                          "UPI:salmar")
 
     def test_bil_provider_token(self):
-        self.assertEqual(payee_key("BIL/[REDACTED]/bescom_jun24/BESCOM_678901"),
+        self.assertEqual(payee_key("BIL/123456789012345/bescom_jun24/BESCOM_1"),
                          "BIL:bescom_jun24")
-        self.assertEqual(payee_key("BIL/ONL/[REDACTED]/EXCO/1234567890"),
+        self.assertEqual(payee_key("BIL/ONL/123456789012345/EXCO/7"),
                          "BIL:EXCO")
 
     def test_bank_transfer(self):
