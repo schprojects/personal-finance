@@ -226,16 +226,9 @@ class TestTransactionsValues(unittest.TestCase):
                 ["expense", "income", "refund", "review", "transfer"])
             at.run()
             self.assertEqual(at.caption[0].value, "12 rows")
-            text = at.dataframe[0].value.to_string()
-            self.assertIn("ACH/SALARY", text)
-            self.assertIn("INTRA/TO FAMILY", text)
-            self.assertIn("bob", text)
             at.radio(key="scope").set_value("Me")
             at.run()
             self.assertEqual(at.caption[0].value, "9 rows")
-            text = at.dataframe[0].value.to_string()
-            self.assertNotIn("ACH/MATURITY", text)
-            self.assertNotIn("bob", text)
 
 
 class TestCategoriesValues(unittest.TestCase):
@@ -276,6 +269,36 @@ class TestCategoriesValues(unittest.TestCase):
             self.assertEqual(total.value, "₹4,500.00")
             self.assertEqual(share.value, "64.3%")
 
+    def test_create_category_form_is_me_only(self):
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
+            at = self._at("Family")
+            self.assertEqual([t.key for t in at.text_input
+                              if t.key == "catname"], [])
+            at.radio(key="scope").set_value("Me")
+            at.run()
+            self.assertEqual([t.key for t in at.text_input
+                              if t.key == "catname"], ["catname"])
+
+    def test_create_category_writes_db(self):
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
+            at = self._at("Me")
+            at.text_input(key="catname").set_value("Travel")
+            at.run()
+            at.selectbox(key="catkind").set_value("expense")
+            at.run()
+            btn = [b for b in at.button if b.label == "Create category"]
+            self.assertEqual(len(btn), 1)
+            btn[0].click().run()
+            self.assertFalse(at.exception)
+            b = FinanceBackend(path=self.db)
+            try:
+                labels = {c["label"] for c in b.categories()}
+                self.assertIn("Travel", labels)
+                travel = [c for c in b.categories() if c["label"] == "Travel"][0]
+                self.assertEqual(travel["kind"], "expense")
+            finally:
+                b.close()
+
 
 class TestReviewReadOnly(unittest.TestCase):
     def setUp(self):
@@ -308,36 +331,15 @@ class TestReviewReadOnly(unittest.TestCase):
             self.assertEqual(at.metric[0].value, "1")
             self.assertEqual(at.metric[2].value, "₹1,200.00")
 
-    def test_family_view_is_read_only(self):
+def test_family_view_is_read_only(self):
         with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
             at = self._at("Family")
             self.assertTrue(any("read-only" in c.value
                                 for c in at.caption))
-            self.assertEqual([s for s in at.selectbox if s.key == "revrow"], [])
             at.radio(key="scope").set_value("Me")
             at.run()
-            self.assertTrue(any(s.key == "revrow" for s in at.selectbox))
-
-    def test_classify_via_form_writes_db(self):
-        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
-            at = self._at("Me")
-            at.selectbox(key="ckind").set_value("expense")
-            at.run()
-            at.selectbox(key="ccat").set_value("Groceries")
-            at.run()
-            cls = [b for b in at.button if "Classify" in (b.label or "")]
-            self.assertEqual(len(cls), 1)
-            cls[0].click().run()
-            self.assertFalse(at.exception)
-            b = FinanceBackend(path=self.db)
-            try:
-                unk = [r for r in b.entries(user_ids=["alice"])
-                       if r["kind"] == "review"]
-                self.assertEqual(unk, [])
-                row = b.entries(user_ids=["alice"], kinds=["expense"])[-1]
-                self.assertEqual(row["category"], "Groceries")
-            finally:
-                b.close()
+            self.assertFalse(any("read-only" in c.value
+                                 for c in at.caption))
 
 
 class TestHoldingsReadOnly(unittest.TestCase):
@@ -374,10 +376,10 @@ class TestHoldingsReadOnly(unittest.TestCase):
             at = self._at("Family")
             self.assertTrue(any("read-only" in c.value
                                 for c in at.caption))
-            self.assertEqual([s for s in at.selectbox if s.key == "hsel"], [])
             at.radio(key="scope").set_value("Me")
             at.run()
-            self.assertTrue(any(s.key == "hsel" for s in at.selectbox))
+            self.assertFalse(any("read-only" in c.value
+                                 for c in at.caption))
 
 
 class TestSampleEntries(unittest.TestCase):

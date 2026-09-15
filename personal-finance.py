@@ -137,6 +137,149 @@ def incoming(rows):
 
 
 # --------------------------------------------------------------------------
+# editable tables (st.data_editor) — Me scope only
+# --------------------------------------------------------------------------
+def commit_entry_edits(backend, me_id, rowmap, edited):
+    """Apply {display_pos: {Kind:…, Category:…}} cell edits from an entries
+    editor. rowmap[display_pos] = (entry_id, owner_id). pos 0-based *display*
+    order (dataframe positions). Returns (applied, errors)."""
+    applied, errors = 0, []
+    for pos, ch in (edited or {}).items():
+        try:
+            entry_id, owner = rowmap[int(str(pos))]
+        except (KeyError, IndexError, TypeError, ValueError):
+            errors.append(f"row {pos}: not in the current view")
+            continue
+        if owner != me_id:
+            errors.append(f"row {pos}: only the owner of a row can edit it")
+            continue
+        kind = ch.get("Kind")
+        cat = (ch.get("Category") or "").strip() or None
+        if kind is None and cat is None:
+            continue
+        try:
+            backend.update_entry(entry_id, me_id,
+                                 kind=kind if kind is not None else None,
+                                 category=cat)
+            applied += 1
+        except ValueError as e:
+            errors.append(f"row {pos}: {e}")
+    return applied, errors
+
+
+HOLDING_FIELD = {"Units": "units", "Purchase date": "purchase_date",
+                 "Purchase NAV": "purchase_nav", "Latest date": "latest_date",
+                 "Latest NAV": "latest_nav", "Value at cost": "value_at_cost",
+                 "Value latest": "value_latest"}
+
+
+def commit_investment_edits(backend, me_id, rowmap, edited):
+    """Apply {display_pos: {field: value}} cell edits from the holdings editor.
+    rowmap[display_pos] = (investment_id, owner_id). Editor columns are keyed
+    by their display titles; titles outside HOLDING_FIELD (identity/primary-key
+    columns) are never written."""
+    applied, errors = 0, []
+    for pos, ch in (edited or {}).items():
+        try:
+            inv_id, owner = rowmap[int(str(pos))]
+        except (KeyError, IndexError, TypeError, ValueError):
+            errors.append(f"row {pos}: not in the current view")
+            continue
+        if owner != me_id:
+            errors.append(f"row {pos}: only the owner can edit it")
+            continue
+        fields = {}
+        for title, v in ch.items():
+            field = HOLDING_FIELD.get(title)
+            if field is None:
+                continue
+            fields[field] = v if not isinstance(v, str) else (v.strip() or None)
+        if not fields:
+            continue
+        try:
+            backend.update_investment_fields(inv_id, me_id, **fields)
+            applied += 1
+        except ValueError as e:
+            errors.append(f"row {pos}: {e}")
+    return applied, errors
+
+
+def on_entry_edited(backend, key, rowmap):
+    """data_editor on_change for Transactions/Review: commit cell edits."""
+    if st.session_state.get("scope") != "Me":
+        return
+    me = session_user()
+    if not me:
+        return
+    edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
+    applied, errors = commit_entry_edits(backend, me["id"], rowmap, edited)
+    if errors:
+        st.warning("Some rows were not changed: " + "; ".join(errors))
+    if applied:
+        st.success(f"Updated {applied} row{'s' if applied != 1 else ''}.")
+    if applied or errors:
+        st.rerun()
+
+
+def on_investment_edited(backend, key, rowmap):
+    """data_editor on_change for Holdings: commit cell edits."""
+    if st.session_state.get("scope") != "Me":
+        return
+    me = session_user()
+    if not me:
+        return
+    edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
+    applied, errors = commit_investment_edits(backend, me["id"], rowmap, edited)
+    if errors:
+        st.warning("Some holdings were not changed: " + "; ".join(errors))
+    if applied:
+        st.success(f"Updated {applied} holding{'s' if applied != 1 else ''}.")
+    if applied or errors:
+        st.rerun()
+
+
+def _cat_opts(backend, rr):
+    labels = {c["label"] for c in backend.categories()}
+    for r in rr:
+        labels.add(r["category"])
+    return sorted(labels)
+
+
+def entry_editor(backend, key, rr, editable):
+    """Shared Kind + Category dropdown editor over a row list. Me scope edits
+    (on_change -> on_entry_edited); Family stays display-only."""
+    if not rr:
+        return
+    if not editable:
+        st.caption("Family view is read-only — switch to Me to edit a row.")
+    rowmap = [(r["id"], r["member"]) for r in rr]
+    tbl = [{"Date": r["date_s"], "Member": r["member"], "Mode": r["mode"] or "—",
+            "Kind": r["kind"], "Category": r["category"],
+            "Particulars": r["part"][:120],
+            "Debit": r["wd"] or None, "Credit": r["dep"] or None}
+           for r in rr]
+    editable_cols = ("Kind", "Category")
+    st.data_editor(
+        tbl,
+        key=key,
+        on_change=on_entry_edited,
+        args=(backend, key, rowmap),
+        disabled=([c for c in tbl[0] if c not in editable_cols]
+                  if not editable else True),
+        column_config={
+            "Kind": st.column_config.SelectboxColumn(
+                "Kind", options=sorted(set(KINDS) | {r["kind"] for r in rr}),
+                required=True),
+            "Category": st.column_config.SelectboxColumn(
+                "Category", options=_cat_opts(backend, rr), required=True),
+            "Debit": st.column_config.NumberColumn(format="₹ %d"),
+            "Credit": st.column_config.NumberColumn(format="₹ %d"),
+        },
+        width="stretch", height=560, hide_index=True,
+    )
+
+
+# --------------------------------------------------------------------------
 # shared sidebar filters
 # --------------------------------------------------------------------------
 def sidebar_filters(rows):
@@ -257,7 +400,7 @@ def page_overview(rows, f):
             st.plotly_chart(fig, width="stretch")
 
 
-def page_transactions(rows, f):
+def page_transactions(backend, rows, f, me, editable):
     q = st.text_input("Search particulars / payee / category", key="q")
     only_review = st.toggle("UNKNOWN rows only", key="only_rev")
     rr = filtered(rows, f)
@@ -269,25 +412,26 @@ def page_transactions(rows, f):
     if only_review:
         rr = [r for r in rr if r["category"] == UNKNOWN]
     rr.sort(key=lambda r: (r["date"], r["ym"]), reverse=True)
-    tbl = [{"Date": r["date_s"], "Member": r["member"], "Mode": r["mode"],
-            "Category": r["category"], "Kind": r["kind"],
-            "Particulars": r["part"][:120],
-            "Debit": r["wd"] or None, "Credit": r["dep"] or None}
-           for r in rr]
     st.caption(f"{len(rr)} rows")
-    st.dataframe(
-        tbl,
-        width="stretch",
-        height=560,
-        hide_index=True,
-        column_config={
-            "Debit": st.column_config.NumberColumn(format="₹ %d"),
-            "Credit": st.column_config.NumberColumn(format="₹ %d"),
-        },
-    )
+    entry_editor(backend, "ed_entries", rr, editable)
 
 
-def page_categories(rows, f):
+def page_categories(backend, rows, f, me, editable):
+    if editable:
+        st.markdown("#### Create a category")
+        with st.form("newcat"):
+            lbl = st.text_input("Category label", key="catname")
+            kd = st.selectbox("Kind", list(KINDS), key="catkind")
+            if st.form_submit_button("Create category"):
+                try:
+                    res = backend.create_category(lbl, kd)
+                    if res == "created":
+                        st.success("Category created.")
+                    else:
+                        st.info("Category already exists.")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
     cats = sorted({r["category"] for r in filtered(rows, f) if r["kind"] == "expense"})
     if not cats:
         st.info("No categories in the current filter.")
@@ -329,7 +473,7 @@ def page_categories(rows, f):
 
 
 def page_review(backend, rows, f, me, editable):
-    """UNKNOWN-category rows grouped by payee; the owner may classify a row."""
+    """UNKNOWN-category rows; the owner classifies a row's kind + category."""
     rev = [r for r in filtered(rows, f) if r["category"] == UNKNOWN]
     c1, c2, c3 = st.columns(3)
     c1.metric("Rows", len(rev))
@@ -337,9 +481,6 @@ def page_review(backend, rows, f, me, editable):
     c3.metric("Debit", inr(sum(r["wd"] for r in rev)))
     if not rev:
         st.info("Nothing in review for these filters.")
-        return
-    if not editable:
-        st.caption("Family view is read-only — switch to Me to classify a row.")
         return
     grp = {}
     for r in rev:
@@ -352,47 +493,7 @@ def page_review(backend, rows, f, me, editable):
     fig.update_layout(yaxis_tickformat="~s", margin=dict(t=10, b=40),
                       xaxis_tickangle=-30, height=360)
     st.plotly_chart(fig, width="stretch")
-
-    pick = st.selectbox("Inspect payee", [k for k, _ in grp], key="revpick",
-                        format_func=lambda k: f"{k} — {dict(grp)[k][0]} rows")
-    rows_p = [r for r in rev if r["payee"] == pick]
-    st.dataframe(
-        [{"id": r["id"], "Date": r["date_s"], "Particulars": r["part"][:120],
-          "Member": r["member"], "Credit": r["dep"], "Debit": r["wd"]}
-         for r in rows_p],
-        width="stretch", height=280, hide_index=True,
-        column_config={"Credit": st.column_config.NumberColumn(format="₹ %d"),
-                       "Debit": st.column_config.NumberColumn(format="₹ %d")},
-    )
-
-    st.markdown("#### Classify a row")
-    owned = [r for r in rows_p if r["member"] == me["id"]]
-    if not owned:
-        st.caption("Only the owner of a row can classify it (this payee's rows "
-                   "belong to someone else in this view).")
-        return
-    idx = st.selectbox("Row", range(len(owned)), key="revrow",
-                       format_func=lambda i: f"{owned[i]['date_s']}  "
-                       f"{owned[i]['part'][:60]}  ₹{owned[i]['wd']:,.0f}")
-    cats = sorted({c["label"] for c in backend.categories() if c["label"] != "UNKNOWN"})
-    with st.form("classify"):
-        kind = st.selectbox("Kind", list(KINDS), key="ckind")
-        cat = st.selectbox("Category", cats, key="ccat",
-                           placeholder="pick an existing category")
-        new_cat = st.text_input("…or a new category (takes precedence)", key="cnew")
-        if st.form_submit_button("Classify"):
-            target = owned[idx]
-            cat_eff = (new_cat.strip() or cat or None)
-            if cat_eff:
-                try:
-                    backend.classify_unknown(target["id"], me["id"],
-                                             kind, cat_eff)
-                    st.success(f"Classified row as {kind} / {cat_eff}")
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
-            else:
-                st.error("Choose or type a category")
+    entry_editor(backend, "ed_review", rev, editable)
 
 
 def _ret_pct(cost, latest):
@@ -430,22 +531,65 @@ def page_holdings(backend, user_ids, me, editable):
         schemes = [r for r in mine if r["type"] == "MF"]
         assets = [r for r in mine if r["type"] != "MF"]
         if schemes:
-            tbl = [{
-                "Label": r["label"][:60],
-                "Units": (f"{r['units']:,.4f}" if r["units"] is not None else ""),
-                "Latest NAV": (f"{r['latest_nav']:,.4f} @ {r['latest_date']}"
-                               if r["latest_nav"] is not None else ""),
-                "Value at cost": inr(r["value_at_cost"])
-                                 if r["value_at_cost"] is not None else "—",
-                "Value latest": inr(r["value_latest"])
-                                if r["value_latest"] is not None else "—",
-                "Return": (f"{_ret_pct(r['value_at_cost'], r['value_latest']):+.1f}%"
-                           if _ret_pct(r["value_at_cost"], r["value_latest"]) is not None else "—"),
-                "XIRR": (f"{_xirr_of(r) * 100:+.1f}%" if _xirr_of(r) else "—"),
-            } for r in schemes if r["label"]]
             st.caption("Mutual-fund schemes")
-            st.dataframe(tbl, width="stretch", hide_index=True,
-                         height=min(400, 35 * len(tbl) + 40))
+            if editable and user_id == me["id"]:
+                edt = [{
+                    "Scheme": r["label"][:60],
+                    "Units": r["units"],
+                    "Purchase date": r["purchase_date"],
+                    "Purchase NAV": r["purchase_nav"],
+                    "Latest date": r["latest_date"],
+                    "Latest NAV": r["latest_nav"],
+                    "Value at cost": r["value_at_cost"],
+                    "Value latest": r["value_latest"],
+                    "Return": (f"{_ret_pct(r['value_at_cost'], r['value_latest']):+.1f}%"
+                               if _ret_pct(r["value_at_cost"], r["value_latest"]) is not None else "—"),
+                    "XIRR": (f"{_xirr_of(r) * 100:+.1f}%" if _xirr_of(r) else "—"),
+                } for r in schemes if r["label"]]
+                st.data_editor(
+                    edt, key="ed_holdings", on_change=on_investment_edited,
+                    args=(backend, "ed_holdings",
+                          [(r["id"], r["user_id"]) for r in schemes if r["label"]]),
+                    disabled=[c for c in edt[0]
+                              if c not in ("Units", "Purchase date",
+                                           "Purchase NAV", "Latest date",
+                                           "Latest NAV", "Value at cost",
+                                           "Value latest")],
+                    column_config={
+                        "Units": st.column_config.NumberColumn(
+                            "Units", min_value=0.0, format="%.4f"),
+                        "Purchase date": st.column_config.TextColumn(
+                            "Purchase date", help="ISO date YYYY-MM-DD"),
+                        "Purchase NAV": st.column_config.NumberColumn(
+                            "Purchase NAV", min_value=0.0),
+                        "Latest date": st.column_config.TextColumn(
+                            "Latest date", help="ISO date YYYY-MM-DD"),
+                        "Latest NAV": st.column_config.NumberColumn(
+                            "Latest NAV", min_value=0.0),
+                        "Value at cost": st.column_config.NumberColumn(
+                            "Value at cost", min_value=0.0, format="₹ %.0f"),
+                        "Value latest": st.column_config.NumberColumn(
+                            "Value latest", min_value=0.0, format="₹ %.0f"),
+                    },
+                    width="stretch", height=min(400, 35 * len(edt) + 40),
+                    hide_index=True,
+                )
+            else:
+                tbl = [{
+                    "Label": r["label"][:60],
+                    "Units": (f"{r['units']:,.4f}" if r["units"] is not None else ""),
+                    "Latest NAV": (f"{r['latest_nav']:,.4f} @ {r['latest_date']}"
+                                   if r["latest_nav"] is not None else ""),
+                    "Value at cost": inr(r["value_at_cost"])
+                                     if r["value_at_cost"] is not None else "—",
+                    "Value latest": inr(r["value_latest"])
+                                    if r["value_latest"] is not None else "—",
+                    "Return": (f"{_ret_pct(r['value_at_cost'], r['value_latest']):+.1f}%"
+                               if _ret_pct(r["value_at_cost"], r["value_latest"]) is not None else "—"),
+                    "XIRR": (f"{_xirr_of(r) * 100:+.1f}%" if _xirr_of(r) else "—"),
+                } for r in schemes if r["label"]]
+                st.dataframe(tbl, width="stretch", hide_index=True,
+                             height=min(400, 35 * len(tbl) + 40))
         if assets:
             st.dataframe(
                 [{"Type": r["type"], "Asset / claim": r["label"],
@@ -456,6 +600,9 @@ def page_holdings(backend, user_ids, me, editable):
                      else r["value_at_cost"] or 0.0))],
                 width="stretch", hide_index=True,
                 height=min(400, 35 * len(assets) + 40))
+
+    if not editable:
+        st.caption("Family view is read-only — switch to Me to update a holding.")
 
     agg = {}
     for r in shown:
@@ -479,36 +626,6 @@ def page_holdings(backend, user_ids, me, editable):
         fig.update_layout(height=320, yaxis_tickformat="~s",
                           xaxis_tickangle=-30, margin=dict(t=40))
         st.plotly_chart(fig, width="stretch")
-
-    if not editable:
-        st.caption("Family view is read-only — switch to Me to update a holding.")
-    elif tfilter == "All":
-        st.markdown("#### Update a holding (your rows)")
-        mine = [r for r in shown if r["user_id"] == me["id"]]
-        if not mine:
-            st.caption("No holdings to edit in this view.")
-            return
-        sel = st.selectbox("Holding", range(len(mine)), key="hsel",
-                           format_func=lambda i:
-                           f"{mine[i]['type']} · {mine[i]['label'][:60]}")
-        inv = mine[sel]
-        with st.form("hold"):
-            val = st.number_input("Latest market value (₹)",
-                                  value=float(inv["value_latest"]
-                                              if inv["value_latest"] is not None
-                                              else inv["value_at_cost"] or 0.0),
-                                  min_value=0.0, key="hval")
-            d = st.date_input("As of date", value=(dt.date.fromisoformat(
-                inv["latest_date"]) if inv["latest_date"] else dt.date.today()),
-                key="hdate")
-            if st.form_submit_button("Update"):
-                try:
-                    backend.update_investment_latest(
-                        inv["id"], me["id"], float(val), d.isoformat())
-                    st.success(f"Updated {inv['label'][:40]}.")
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
 
 
 # --------------------------------------------------------------------------
@@ -543,9 +660,9 @@ def main():
             if page == "Overview":
                 page_overview(rows, f)
             elif page == "Transactions":
-                page_transactions(rows, f)
+                page_transactions(backend, rows, f, me, editable)
             elif page == "Categories":
-                page_categories(rows, f)
+                page_categories(backend, rows, f, me, editable)
             elif page == "Holdings":
                 page_holdings(backend, scope, me, editable)
             else:

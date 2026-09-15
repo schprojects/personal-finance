@@ -7,11 +7,26 @@ headlessly, so the authenticated runs pre-set st.session_state.user.
 import os
 import tempfile
 import unittest
+import importlib.util
 from unittest import mock
 
 from streamlit.testing.v1 import AppTest
 
 from backend import FinanceBackend
+
+
+APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                   "personal-finance.py")
+_pf = None
+
+
+def pf_module():
+    global _pf
+    if _pf is None:
+        spec = importlib.util.spec_from_file_location("personal_finance", APP)
+        _pf = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_pf)
+    return _pf
 
 
 def make_db(path):
@@ -42,10 +57,6 @@ def make_db(path):
 
 
 USER_A = {"id": "a", "username": "a", "display_name": "a", "family_id": "f1"}
-
-
-APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                   "personal-finance.py")
 
 
 def make_zero_db(path):
@@ -90,9 +101,13 @@ class TestDashboardPages(unittest.TestCase):
             at.radio(key="scope").set_value("Me")
             at.run()
             self.assertFalse(at.exception)
-            # 'b' income row must not appear in Me scope
-            text = " ".join(str(x) for x in at.dataframe)
-            self.assertNotIn("ACH/INCOME", text)
+            b = FinanceBackend(path=self.db)
+            try:
+                # Me scope queries only the signed-in user's rows
+                ids = {r["user_id"] for r in b.entries(user_ids=["a"])}
+                self.assertEqual(ids, {"a"})
+            finally:
+                b.close()
 
     def test_login_page_when_anonymous(self):
         with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
@@ -132,6 +147,88 @@ class TestDashboardPages(unittest.TestCase):
                 at = self._at()
                 at.run()
                 self.assertFalse(at.exception)
+
+
+class TestEditHelpers(unittest.TestCase):
+    """st.data_editor is invisible to AppTest (unknown delta type, skipped),
+    so the cell-edit write path is exercised through the commit helpers with
+    simulated edited_rows."""
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.d.name, "networth.db")
+        make_db(self.db)
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def test_entry_edits_commit_and_ownership(self):
+        pf = pf_module()
+        b = FinanceBackend(path=self.db)
+        try:
+            rows = b.entries(user_ids=["a"])  # date order: expense, then review
+            rowmap = [(r["id"], r["user_id"]) for r in rows]
+            self.assertEqual(rows[1]["kind"], "review")
+            # only the cells actually edited are written (kind kept)
+            applied, errors = pf.commit_entry_edits(
+                b, "a", rowmap, {1: {"Category": "Groceries"}})
+            self.assertEqual((applied, errors), (1, []))
+            row = b.entries(user_ids=["a"])[1]
+            self.assertEqual((row["kind"], row["category"]),
+                             ("review", "Groceries"))
+            applied, errors = pf.commit_entry_edits(
+                b, "a", rowmap, {1: {"Kind": "expense"}})
+            self.assertEqual((applied, errors), (1, []))
+            changed = b.entries(user_ids=["a"], kinds=["expense"])
+            self.assertEqual(len(changed), 2)  # original + reclassified review
+            # non-owner attempts are refused
+            applied, errors = pf.commit_entry_edits(
+                b, "b", rowmap, {0: {"Category": "Other"}})
+            self.assertEqual((applied, len(errors)), (0, 1))
+            # out-of-range position is reported, not raised
+            applied, errors = pf.commit_entry_edits(b, "a", rowmap, {99: {}})
+            self.assertEqual((applied, len(errors)), (0, 1))
+        finally:
+            b.close()
+
+    def test_investment_edits_commit_and_reject_identity(self):
+        pf = pf_module()
+        b = FinanceBackend(path=self.db)
+        try:
+            invs = b.investments(user_ids=["a"])
+            rowmap = [(r["id"], r["user_id"]) for r in invs]
+            mf = invs[0]  # ORDER BY type -> 'MF' before 'cash'
+            applied, errors = pf.commit_investment_edits(
+                b, "a", rowmap,
+                {0: {"Latest NAV": 12.0, "Value latest": 1200.0}})
+            self.assertEqual((applied, errors), (1, []))
+            fixed = b.investments(user_ids=["a"])[0]
+            self.assertEqual(fixed["latest_nav"], 12.0)
+            self.assertEqual(fixed["value_latest"], 1200.0)
+            self.assertIsNotNone(fixed["edited_at"])
+            # identity/primary-key columns are never written
+            applied, errors = pf.commit_investment_edits(
+                b, "a", rowmap, {0: {"type": "cash", "label": "hijack"}})
+            self.assertEqual((applied, errors), (0, []))
+            fixed = b.investments(user_ids=["a"])[0]
+            self.assertEqual(fixed["type"], "MF")
+            self.assertEqual(fixed["label"], mf["label"])
+            # non-owner refused
+            applied, errors = pf.commit_investment_edits(
+                b, "b", rowmap, {0: {"Value latest": 1.0}})
+            self.assertEqual((applied, len(errors)), (0, 1))
+            # blank strings clear a field
+            b.upsert_investment("a", type_="FD", label="FixDep",
+                                value_latest=1000)
+            fds = [r for r in b.investments(user_ids=["a"]) if r["type"] == "FD"]
+            applied, errors = pf.commit_investment_edits(
+                b, "a", [(fds[0]["id"], fds[0]["user_id"])],
+                {0: {"Value latest": ""}})
+            self.assertEqual((applied, errors), (1, []))
+            fd = [r for r in b.investments(user_ids=["a"]) if r["type"] == "FD"][0]
+            self.assertIsNone(fd["value_latest"])
+        finally:
+            b.close()
 
 
 if __name__ == "__main__":

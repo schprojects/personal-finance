@@ -46,9 +46,14 @@ entries; family-wide viewing allowed.
 - Create/update allowed only when the entry/investment owner == current user.
 - Dashboard has a "Family / me" toggle; "me" shows/edits only own rows.
 
-## Edit surface (v1)
-- In-app editing: classify `UNKNOWN` rows to a real category; update an
-  investment's latest value/date. No free-form create/delete yet.
+## Edit surface (v2)
+- In-app editing (Me scope only; Family is read-only):
+  - Re-classify any row's kind + category via dropdown tables (Review = UNKNOWN
+    rows; Transactions = the filtered set).
+  - Create a category (label + kind) on the Categories screen.
+  - Update a holding's units / purchase date / purchase NAV / latest date /
+    latest NAV / value at cost / value latest — never the primary-key identity.
+- No free-form entry/delete yet.
 
 # Out of scope
 - Roles/admin users; OAuth/SSO/2FA; self-service password reset or in-app sign-up

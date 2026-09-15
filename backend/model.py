@@ -159,6 +159,21 @@ class FinanceBackend:
             (label, label, kind))
         return label
 
+    def create_category(self, label, kind):
+        """Dashboard create: blank labels rejected; returns 'created'|'exists'."""
+        label = (label or "").strip()
+        if not label:
+            raise ValueError("category label must not be blank")
+        existing = db.one(self.con,
+                          "SELECT id FROM categories WHERE label = ?", (label,))
+        if existing:
+            return "exists"
+        self.con.execute(
+            "INSERT INTO categories (id, label, kind) VALUES (?, ?, ?)",
+            (label, label, kind))
+        self.con.commit()
+        return "created"
+
     # -- entries -----------------------------------------------------------
     def upsert_bank_entry(self, user_id, *, account, date, mode, particulars,
                           deposit, withdrawal, balance, kind, category, file=""):
@@ -226,18 +241,38 @@ class FinanceBackend:
             sql += f" LIMIT {int(limit)}"
         return db.rows(self.con, sql, params)
 
-    def classify_unknown(self, entry_id, user_id, kind, category):
-        """Dashboard edit: give an UNKNOWN row a real kind + category."""
+    def update_entry(self, entry_id, user_id, kind=None, category=None):
+        """Dashboard edit: set a row's kind and/or category (owner only)."""
         row = db.one(self.con, "SELECT * FROM entries WHERE id = ?", (entry_id,))
         if not row:
             raise ValueError("entry not found")
         if row["user_id"] != user_id:
             raise ValueError("not the owner of this entry")
-        category_id = self.get_or_create_category(category, kind)
+        if kind is not None and kind not in ("expense", "income", "investment",
+                                             "transfer", "reimbursed",
+                                             "refund", "credit", "review"):
+            raise ValueError(f"unsupported kind: {kind}")
+        category = (category or "").strip()
+        if kind is None and not category:
+            raise ValueError("provide a kind and/or category")
+        if category:
+            category_id = self.get_or_create_category(category,
+                                                      kind or row["kind"])
+        else:
+            category_id = row["category_id"]
+        sets, params = ["edited_at = ?"], [auth.now_utc().isoformat()]
+        if kind is not None:
+            sets.append("kind = ?"); params.append(kind)
+        if category:
+            sets.append("category_id = ?"); params.append(category_id)
+        params.append(entry_id)
         self.con.execute(
-            "UPDATE entries SET category_id = ?, kind = ?, edited_at = ? WHERE id = ?",
-            (category_id, kind, auth.now_utc().isoformat(), entry_id))
+            f"UPDATE entries SET {', '.join(sets)} WHERE id = ?", params)
         self.con.commit()
+
+    def classify_unknown(self, entry_id, user_id, kind, category):
+        """Dashboard edit: give an UNKNOWN row a real kind + category."""
+        self.update_entry(entry_id, user_id, kind=kind, category=category)
 
     # -- investments -------------------------------------------------------
     def upsert_investment(self, user_id, *, type_, label, folio="", units=None,
@@ -285,17 +320,32 @@ class FinanceBackend:
             sql += " WHERE " + " AND ".join(conds)
         return db.rows(self.con, sql + " ORDER BY user_id, type, label", params)
 
-    def update_investment_latest(self, investment_id, user_id, value_latest,
-                                 latest_date=None):
+    INVESTMENT_EDITABLE = ("units", "purchase_date", "purchase_nav",
+                           "latest_date", "latest_nav", "value_at_cost",
+                           "value_latest")
+
+    def update_investment_fields(self, investment_id, user_id, **fields):
+        """Dashboard edit: write any non-identity column (owner only). None
+        clears a field; unknown fields are rejected."""
+        unknown = set(fields) - set(self.INVESTMENT_EDITABLE)
+        if unknown:
+            raise ValueError(f"cannot edit: {sorted(unknown)}")
         row = db.one(self.con, "SELECT * FROM investments WHERE id = ?",
                      (investment_id,))
         if not row:
             raise ValueError("investment not found")
         if row["user_id"] != user_id:
             raise ValueError("not the owner of this investment")
+        if not fields:
+            raise ValueError("nothing to update")
+        sets = ", ".join(f"{k} = ?" for k in fields)
         self.con.execute(
-            "UPDATE investments SET value_latest = ?, latest_date = ?, edited_at = ?"
-            " WHERE id = ?",
-            (float(value_latest), latest_date, auth.now_utc().isoformat(),
-             investment_id))
+            f"UPDATE investments SET {sets}, edited_at = ? WHERE id = ?",
+            [*fields.values(), auth.now_utc().isoformat(), investment_id])
         self.con.commit()
+
+    def update_investment_latest(self, investment_id, user_id, value_latest,
+                                 latest_date=None):
+        self.update_investment_fields(
+            investment_id, user_id, value_latest=value_latest,
+            latest_date=latest_date)

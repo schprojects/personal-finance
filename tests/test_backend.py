@@ -146,6 +146,33 @@ class TestEntries(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.b.classify_unknown(999, "a", "expense", "X")
 
+    def test_update_entry_partial_and_owner(self):
+        kw = dict(account="A", date="2025-05-02", mode="", particulars="W",
+                  deposit=0, withdrawal=10, balance=50, file="t.csv")
+        self.b.upsert_bank_entry("a", kind="expense", category="UNKNOWN", **kw)
+        rid = self.b.entries(user_ids=["a"])[0]["id"]
+        self.b.update_entry(rid, "a", category="Groceries")       # keep kind
+        row = self.b.entries(user_ids=["a"])[0]
+        self.assertEqual((row["kind"], row["category"]),
+                         ("expense", "Groceries"))
+        self.b.update_entry(rid, "a", kind="review")              # keep category
+        row = self.b.entries(user_ids=["a"])[0]
+        self.assertEqual((row["kind"], row["category"]),
+                         ("review", "Groceries"))
+        self.assertIsNotNone(row["edited_at"])
+        self.b.update_entry(rid, "a", kind="expense", category="UNKNOWN")
+        with self.assertRaises(ValueError):
+            self.b.update_entry(rid, "b", category="X")           # not owner
+        with self.assertRaises(ValueError):
+            self.b.update_entry(999, "a", category="X")
+        with self.assertRaises(ValueError):
+            self.b.update_entry(rid, "a")                         # nothing given
+        with self.assertRaises(ValueError):
+            self.b.update_entry(rid, "a", kind="bogus")
+        row = self.b.entries(user_ids=["a"])[0]
+        self.assertEqual((row["kind"], row["category"]),
+                         ("expense", "UNKNOWN"))
+
     def test_entry_filters(self):
         rows = [
             dict(account="A", date="2025-04-03", mode="", particulars="UPI/x",
@@ -192,6 +219,52 @@ class TestInvestments(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.b.update_investment_latest(inv["id"], "other", 1)  # not owner
         self.assertEqual(len(self.b.investments(user_ids=["a"], type_="FD")), 0)
+
+    def test_update_investment_fields_whitelist_and_owner(self):
+        self.b.upsert_investment(
+            "a", type_="MF", label="Axis", folio="F1", units=100,
+            purchase_date="2023-04-01", purchase_nav=10.0, latest_date="2024-04-01",
+            latest_nav=11.0, value_at_cost=1000, value_latest=1100)
+        rid = self.b.investments(user_ids=["a"])[0]["id"]
+        with self.assertRaises(ValueError):
+            self.b.update_investment_fields(rid, "a", type="cash")   # identity
+        with self.assertRaises(ValueError):
+            self.b.update_investment_fields(rid, "a")                # nothing
+        with self.assertRaises(ValueError):
+            self.b.update_investment_fields(rid, "other", units=1)   # not owner
+        with self.assertRaises(ValueError):
+            self.b.update_investment_fields(999, "a", units=1)
+        self.b.update_investment_fields(rid, "a", units=90,
+                                        purchase_nav=10.5, latest_nav=None)
+        inv = self.b.investments(user_ids=["a"])[0]
+        self.assertEqual(inv["units"], 90)
+        self.assertEqual(inv["purchase_nav"], 10.5)
+        self.assertIsNone(inv["latest_nav"])                          # cleared
+        self.assertIsNotNone(inv["edited_at"])
+
+
+class TestCategories(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.b = make_backend(self.d.name)
+        self.b.seed_members([{"name": "a", "data_dir": "data/a"}])
+
+    def tearDown(self):
+        self.b.close()
+        self.d.cleanup()
+
+    def test_create_category(self):
+        self.assertEqual(self.b.create_category("Travel", "expense"), "created")
+        self.assertEqual(self.b.create_category("Travel", "income"), "exists")
+        self.assertEqual(
+            [c for c in self.b.categories() if c["label"] == "Travel"][0]["kind"],
+            "expense")
+        with self.assertRaises(ValueError):
+            self.b.create_category("   ", "expense")
+        # importer path still creates implicitly
+        self.assertEqual(self.b.get_or_create_category("Pet care", "expense"),
+                         "Pet care")
+        self.assertIn("Pet care", {c["label"] for c in self.b.categories()})
 
 
 if __name__ == "__main__":
