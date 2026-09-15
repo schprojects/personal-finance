@@ -122,17 +122,18 @@ rule base.
 
 Password-login pages (see **Backend** for the session store). Reads `entries` /
 `investments` from the database on every render; a sidebar "Family / me" radio
-scopes reads and a member can edit only their own rows. Sidebar filters (FY,
-category, kind, mode, max amount) and a "Daily-spend baseline" toggle apply
-across five sections:
+scopes reads. The **family view is read-only**; the Me view adds edit forms for
+the member's own rows. Sidebar filters (FY, category, kind,
+mode, max amount) and a "Daily-spend baseline" toggle apply across five
+sections:
 
 | Section | What it shows |
 |---|---|
-| **Overview** | net spend, savings rate, income vs spend per FY, top category, unreviewed count; focus-year monthly trend vs prior FY + cumulative spend line; top-8 category donut |
+| **Overview** | net spend, savings rate, income vs spend per FY, top category, unreviewed count; focus-year monthly trend vs prior FY + cumulative spend line; top-8 category donut. Incoming / net spend / savings rate aggregate over the current scope and selected FYs (income and credit always fund the Incoming card, even though the Kinds filter defaults to spend kinds — bug-fix-001) |
 | **Transactions** | full classified table: search, kind/category filter, review-only toggle, ₹-formatted |
 | **Categories** | per-category monthly trend across FYs + top payees within it |
-| **Review** | UNKNOWN rows grouped by payee (count + ₹), per-payee drill, and a classify form that sets kind + category on the member's own row |
-| **Holdings** | household net worth from the investments table; MF schemes (units, cost, latest NAV, absolute return % **+ XIRR**); cash/asset rows; per-member donut + largest-schemes bar; an edit form to refresh the latest value + as-of date of an owned holding |
+| **Review** | UNKNOWN rows grouped by payee (count + ₹), per-payee drill, and — in the Me view only — a classify form that sets kind + category on the member's own row |
+| **Holdings** | household net worth from the investments table; MF schemes (units, cost, latest NAV, absolute return % **+ XIRR**); cash/asset rows; per-member donut + largest-schemes bar; a Me-view-only edit form to refresh the latest value + as-of date of an owned holding |
 
 Edits commit `manual_override`, so a later re-import never touches them.
 To see **XIRR (annualized)** for a scheme, its MF sheet must author a
@@ -159,7 +160,10 @@ investment upsert), the `impex` CLI (import/upsert semantics,
 reconcile-FAIL → `failed-<N>.csv` dedup, investment typing, export scope and
 format, backup/restore round-trip, auth gate, OpenRouter rule extraction), and
 the dashboard via streamlit's `AppTest` (`tests/test_app.py` — all five pages,
-family/me scope, login gate).
+family/me scope, login gate; `tests/test_dashboard_values.py` — value-level
+assertions over a clean two-member, two-FY sample: exact Overview figures per
+scope/FY, row counts, category totals/shares, and Family-view read-only
+behaviour, see bug-fix-001.md).
 
 ## Backend (database)
 

@@ -215,7 +215,11 @@ def page_overview(rows, f):
         fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), showlegend=True)
         st.plotly_chart(fig, width="stretch")
 
-    inc = incoming(filtered(rows, f))
+    # Income must survive the spend-oriented Kinds multiselect (default excludes
+    # income/credit) or Incoming/Savings rate read zero. Scoped like the rest
+    # of the view: same FYs / modes / maxamt, same user scope.
+    f_inc = dict(f, kinds=f["kinds"] | {"income", "credit"})
+    inc = incoming(filtered(rows, f_inc))
     inc_fy, spend_fy = {}, {}
     for r in inc:
         inc_fy[r["fy"]] = inc_fy.get(r["fy"], 0.0) + r["dep"]
@@ -324,7 +328,7 @@ def page_categories(rows, f):
         st.plotly_chart(fig, width="stretch")
 
 
-def page_review(backend, rows, f, me):
+def page_review(backend, rows, f, me, editable):
     """UNKNOWN rows grouped by payee; the owner may classify a row."""
     rev = [r for r in filtered(rows, f) if r["kind"] == "review"]
     c1, c2 = st.columns(2)
@@ -332,6 +336,9 @@ def page_review(backend, rows, f, me):
     c2.metric("Amount", inr(sum(r["wd"] for r in rev)))
     if not rev:
         st.info("Nothing in review for these filters.")
+        return
+    if not editable:
+        st.caption("Family view is read-only — switch to Me to classify a row.")
         return
     grp = {}
     for r in rev:
@@ -396,7 +403,7 @@ def _xirr_of(inv):
                  (dt.date.fromisoformat(inv["latest_date"]), inv["value_latest"])])
 
 
-def page_holdings(backend, user_ids, me):
+def page_holdings(backend, user_ids, me, editable):
     invs = backend.investments(user_ids=list(user_ids))
     st.markdown("##### Holdings — from the investments database")
     if not invs:
@@ -470,7 +477,9 @@ def page_holdings(backend, user_ids, me):
                           xaxis_tickangle=-30, margin=dict(t=40))
         st.plotly_chart(fig, width="stretch")
 
-    if tfilter == "All":
+    if not editable:
+        st.caption("Family view is read-only — switch to Me to update a holding.")
+    elif tfilter == "All":
         st.markdown("#### Update a holding (your rows)")
         mine = [r for r in shown if r["user_id"] == me["id"]]
         if not mine:
@@ -520,6 +529,7 @@ def main():
             page = st.radio("Section", PAGES, key="page")
             who = st.radio("Scope", ("Family", "Me"), key="scope")
         scope = family if who == "Family" else [me["id"]]
+        editable = who == "Me"
         rows = load_rows(backend, scope)
         if not rows:
             st.warning("No bank entries in the database for this scope. "
@@ -534,9 +544,9 @@ def main():
             elif page == "Categories":
                 page_categories(rows, f)
             elif page == "Holdings":
-                page_holdings(backend, scope, me)
+                page_holdings(backend, scope, me, editable)
             else:
-                page_review(backend, rows, f, me)
+                page_review(backend, rows, f, me, editable)
     finally:
         backend.close()
 

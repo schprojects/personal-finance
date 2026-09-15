@@ -15,6 +15,8 @@ To build an application which presents investments and bank-transactions in a ni
 - dashboard shall provide the ability to show data for a family unit 
 - dashboard should provide ways to drill down information per FY,various fields of bank-statements, fields of investments
 - it should have the ability to show details per person and also for the family with an option to choose
+- in the family view nothing should be editable
+- every view must aggregate the items for that user and for that scope
 
 # Out of scope
 - create historic records for MFs at monthly cadence
