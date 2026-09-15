@@ -8,7 +8,7 @@ a small same-site JS helper (st.html, unsafe_allow_javascript) because
 Streamlit has no public cookie API. Any member may view the whole family; only
 the owner of a row may edit it.
 
-Run:  .venv/bin/streamlit run app.py
+Run:  .venv/bin/streamlit run personal-finance.py
 """
 import datetime as dt
 
@@ -66,7 +66,7 @@ def restore_token(backend):
 
 
 def login_ui(backend):
-    st.title("Expense tracker")
+    st.title("Personal Finance")
     c = st.columns([1, 1, 1])[1]
     with c:
         st.markdown("#### Sign in")
@@ -500,7 +500,7 @@ def page_holdings(backend, user_ids, me):
 
 # --------------------------------------------------------------------------
 def main():
-    st.set_page_config(page_title="Expense tracker", layout="wide")
+    st.set_page_config(page_title="Personal Finance", layout="wide")
     backend = FinanceBackend()
     me = auth_gate(backend)
     if not me:

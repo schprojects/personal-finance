@@ -1,7 +1,7 @@
 # SPEC.md
 
 # Goal
-Family networth, expenses  expense tracker. `README.md` is the runbook.
+Personal & family net-worth / expense tracker ("Personal Finance"). `README.md` is the runbook.
 
 # Costraints
 - ~~use csv files as truth for now~~

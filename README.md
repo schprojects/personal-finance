@@ -1,4 +1,4 @@
-# Expense Tracker
+# Personal Finance
 
 Family expense and net-worth dashboard — Simplifi / Mint style, backed by an
 sqlite database (see **Backend**) that the importer feeds and members edit
@@ -20,7 +20,7 @@ python3 -m venv .venv
 # (add --mode auto to also consult OpenRouter and grow auto-rules.csv)
 
 # run the dashboard -- sign in with your member password
-.venv/bin/streamlit run app.py
+.venv/bin/streamlit run personal-finance.py
 ```
 
 Every `impex.py` subcommand asks for that member's password (or `--password-file
@@ -93,11 +93,12 @@ before anything is touched. Every import appends a run log under `var/logs/`.
 ```
 
 `dist/` ships the app + importer + rule engine + `requirements.txt` + this
-README, minus runtime data and secrets; running `streamlit run app.py` inside
-`dist/` works as here. `--with-db <path>` copies an sqlite db to
-`dist/var/networth.db`, which is exactly where the app and `impex.py` look by
-default, so the bundle starts on that data with no extra configuration
-. Both `dist/` and `dist.zip` are gitignored build artifacts.
+README, minus runtime data and secrets; running `streamlit run
+personal-finance.py` inside `dist/` works as here. `--with-db <path>` copies an
+sqlite db to `dist/var/networth.db`, which is exactly where the app and
+`impex.py` look by default, so the bundle starts on that data with no extra
+configuration. Both `dist/` and `dist.zip` are gitignored build
+artifacts.
 
 Rules (`--mode`): `existing` = manual-rules.csv (if present) then auto-rules.csv;
 `manual` / `auto` restrict to one file; `both` is identical to `existing`.
@@ -117,7 +118,7 @@ block no longer stops the run — its rows go to `output/<FY>/failed-<N>.csv`
 retired. `data/` stays the import source; `auto-rules.csv` is the committed
 rule base.
 
-### Dashboard (`app.py`)
+### Dashboard (`personal-finance.py`)
 
 Password-login pages (see **Backend** for the session store). Reads `entries` /
 `investments` from the database on every render; a sidebar "Family / me" radio
@@ -143,7 +144,7 @@ market at the latest NAV. No column, no XIRR — the cell shows `—`.
 
 `fy_of`, `inr`, `money`, `payee_key`, `load_members`, `statements_for`,
 `investments_for`, `BASELINE_EXCLUDED` -- imported by both `classify.py` and
-`app.py`.
+`personal-finance.py`.
 
 ### Tests (`tests/`)
 
@@ -187,7 +188,7 @@ server-side; `Sign out` revokes the token.
 | `scripts/seed_auto_rules.py` | regenerates `auto-rules.csv` from `rules.txt` (equivalence-checked) |
 | `scripts/make_dist.py` | assembles `dist/` + `dist.zip` |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
-| `app.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
+| `personal-finance.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
 | `holdings.py` | investment sheet parser + XIRR |
 | `backend/` | sqlite system of record (schema, model, auth) |
 | `tests/` | unit tests |

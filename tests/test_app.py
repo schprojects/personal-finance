@@ -44,7 +44,8 @@ def make_db(path):
 USER_A = {"id": "a", "username": "a", "display_name": "a", "family_id": "f1"}
 
 
-APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app.py")
+APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                   "personal-finance.py")
 
 
 class TestDashboardPages(unittest.TestCase):

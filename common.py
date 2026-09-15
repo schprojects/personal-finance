@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared helpers for classify.py and app.py (single source of truth).
+"""Shared helpers for classify.py and personal-finance.py (single source of truth).
 
 Lives in the project root; both CLI tools import it. Never writes data.
 """
