@@ -9,5 +9,7 @@
 - write unit tests and refine them later with human intervention or otherwise
 - always use OOAD, clean architecture and clean code principles
 - the code should be very simple
+- never commit any data, secrets etc unless EXPLICITLY asked for
+
 
 

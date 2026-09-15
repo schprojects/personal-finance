@@ -1,18 +1,20 @@
 # dashboard-specs.md
 
 # Goal
-To build an application which presents investments and expenses in a nice dashboard
+To build an application which presents investments and bank-transactions in a nice dashboard
+
+# Constraints
+- use streamlit and plotly for drawing charts
+
 
 # Acceptance criteria
-- dashboard reads from repo/classified-<main>.csv and presents various graphs, slices of data : use the best from expense and portfolio trackers. But keep simple
-- dashboard should display expenses and investments based on expense and investment categories
-- dashboard should provide ways to drill down information per FY
-- dashboard should display various charts [most from the best expense and investment trackers]
-- it should be able to track MFs : plan-name, number of units, purchase-date,purchase-nav,latest-date, latest-nav,value-at-cost,value-latest
-- it should be able to track shares, ETFs similarly
-- it should be able to track cash like PF,FDs,SavingsBank cash
-- the purchase-nav, date, values are not mandatory, it will just show current value
-- the MF/Share should show the XIRR and total return 
+- dashboard shall display bank-transactions and investments based on various categories
+- dashboard shall provide ability to show bank transactions per user with ability to filter on types and other various fields from the schema
+- dashboard shall provide the ability to investments per user with ability to filter on types and other various fields from the schema
+- dashboard shall provide the ability to show various charts for the data being shown as the case may be : pie, bar, column,line graph etc  [most from the best bank-transactions and investment trackers]
+- dashboard shall provide the ability to show data for a family unit 
+- dashboard should provide ways to drill down information per FY,various fields of bank-statements, fields of investments
+- it should have the ability to show details per person and also for the family with an option to choose
 
 # Out of scope
 - create historic records for MFs at monthly cadence
