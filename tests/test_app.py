@@ -6,6 +6,7 @@ headlessly, so the authenticated runs pre-set st.session_state.user.
 """
 import os
 import tempfile
+import threading
 import unittest
 import importlib.util
 from unittest import mock
@@ -242,6 +243,123 @@ class TestEditHelpers(unittest.TestCase):
             self.assertIsNone(fd["value_latest"])
         finally:
             b.close()
+
+
+class TestEditCallbacks(unittest.TestCase):
+    """Streamlit never wires data_editor deltas through AppTest, so the on_change
+    handlers are driven directly against a fake `st`: scope guard, session-key
+    read, and the fact that each callback commits through its own connection
+    (Streamlit runs on_change off-thread, so backend.con is unusable there)."""
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.d.name, "networth.db")
+        make_db(self.db)
+        self.pf = pf_module()
+        self.b = FinanceBackend(path=self.db)
+        self.rows = self.b.entries(user_ids=["a"])
+        self.rowmap = [(r["id"], r["user_id"]) for r in self.rows]
+        self.session = {"scope": "Me", "user": {"id": "a"}}
+
+    def tearDown(self):
+        self.b.close()
+        self.d.cleanup()
+
+    def _call(self, handler, key, *extra):
+        st = mock.MagicMock()
+        st.session_state = self.session
+        with mock.patch.object(self.pf, "st", st):
+            handler(self.b, key, *extra)
+        return st
+
+    def test_entry_callback_persists_kind_and_category(self):
+        self.session["ed_entries"] = {
+            "edited_rows": {1: {"Kind": "expense", "Category": "Groceries"}}}
+        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap)
+        self.assertEqual(self.b.entries(user_ids=["a"])[1]["kind"], "expense")
+        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"],
+                         "Groceries")
+        st.success.assert_called_once()
+        st.warning.assert_not_called()
+        st.rerun.assert_called_once()
+
+    def test_entry_callback_family_scope_writes_nothing(self):
+        self.session["scope"] = "Family"
+        self.session["ed_entries"] = {
+            "edited_rows": {1: {"Category": "Groceries"}}}
+        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap)
+        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"], "UNKNOWN")
+        st.success.assert_not_called()
+        st.warning.assert_not_called()
+        st.rerun.assert_not_called()
+
+    def test_entry_callback_non_owner_row_is_refused(self):
+        self.session["ed_entries"] = {
+            "edited_rows": {0: {"Category": "Groceries"}}}
+        foreign = [(i, "b") for i, _ in self.rowmap]
+        before = self.b.entries(user_ids=["a"])[0]["category"]
+        st = self._call(self.pf.on_entry_edited, "ed_entries", foreign)
+        self.assertEqual(self.b.entries(user_ids=["a"])[0]["category"], before)
+        st.success.assert_not_called()
+        st.warning.assert_called_once()
+        st.rerun.assert_called_once()
+
+    def test_entry_callback_runs_off_the_script_thread(self):
+        """Regression for the real failure: streamlit calls on_change on another
+        thread, so the shared backend.con must never be handed to the commit.
+        Driving the whole handler from a worker thread must succeed."""
+        self.session["ed_entries"] = {
+            "edited_rows": {1: {"Category": "Groceries"}}}
+        failures = []
+        def worker():
+            try:
+                self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap)
+            except Exception as e:  # noqa: BLE001 - captured, asserted below
+                failures.append(e)
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        self.assertEqual(failures, [])
+        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"],
+                         "Groceries")
+
+    def test_investment_callback_persists_editable_fields(self):
+        invs = self.b.investments(user_ids=["a"])
+        rowmap = [(r["id"], r["user_id"]) for r in invs]
+        self.session["ed_holdings"] = {
+            "edited_rows": {0: {"Latest NAV": 12.0, "Value latest": 1200.0}}}
+        st = self._call(self.pf.on_investment_edited, "ed_holdings", rowmap)
+        fixed = self.b.investments(user_ids=["a"])[0]
+        self.assertEqual((fixed["latest_nav"], fixed["value_latest"]),
+                         (12.0, 1200.0))
+        st.success.assert_called_once()
+        st.warning.assert_not_called()
+        st.rerun.assert_called_once()
+
+    def test_investment_callback_ignores_identity_columns(self):
+        invs = self.b.investments(user_ids=["a"])
+        rowmap = [(r["id"], r["user_id"]) for r in invs]
+        self.session["ed_holdings"] = {
+            "edited_rows": {0: {"Type": "cash", "Label": "hijack"}}}
+        st = self._call(self.pf.on_investment_edited, "ed_holdings", rowmap)
+        fixed = self.b.investments(user_ids=["a"])[0]
+        self.assertEqual((fixed["type"], fixed["label"]),
+                         (invs[0]["type"], invs[0]["label"]))
+        st.success.assert_not_called()
+        st.warning.assert_not_called()
+        st.rerun.assert_not_called()
+
+    def test_investment_callback_non_owner_row_is_refused(self):
+        invs = self.b.investments(user_ids=["a"])
+        rowmap = [(r["id"], "b") for r in invs]
+        self.session["ed_holdings"] = {
+            "edited_rows": {0: {"Latest NAV": 1.0}}}
+        st = self._call(self.pf.on_investment_edited, "ed_holdings", rowmap)
+        self.assertEqual(self.b.investments(user_ids=["a"])[0]["latest_nav"],
+                         invs[0]["latest_nav"])
+        st.success.assert_not_called()
+        st.warning.assert_called_once()
+        st.rerun.assert_called_once()
 
 
 if __name__ == "__main__":

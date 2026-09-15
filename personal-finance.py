@@ -11,6 +11,7 @@ the owner of a row may edit it.
 Run:  .venv/bin/streamlit run personal-finance.py
 """
 import datetime as dt
+from contextlib import contextmanager
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -204,6 +205,18 @@ def commit_investment_edits(backend, me_id, rowmap, edited):
     return applied, errors
 
 
+@contextmanager
+def _write_backend(backend):
+    """Streamlit runs on_change callbacks on a different thread than the script
+    run, so the shared backend.con (bound to the script thread) must never be
+    used in a callback. Each callback opens its own short-lived connection."""
+    w = FinanceBackend(backend.path)
+    try:
+        yield w
+    finally:
+        w.close()
+
+
 def on_entry_edited(backend, key, rowmap):
     """data_editor on_change for Transactions/Review: commit cell edits."""
     if st.session_state.get("scope") != "Me":
@@ -212,7 +225,8 @@ def on_entry_edited(backend, key, rowmap):
     if not me:
         return
     edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
-    applied, errors = commit_entry_edits(backend, me["id"], rowmap, edited)
+    with _write_backend(backend) as w:
+        applied, errors = commit_entry_edits(w, me["id"], rowmap, edited)
     if errors:
         st.warning("Some rows were not changed: " + "; ".join(errors))
     if applied:
@@ -229,7 +243,8 @@ def on_investment_edited(backend, key, rowmap):
     if not me:
         return
     edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
-    applied, errors = commit_investment_edits(backend, me["id"], rowmap, edited)
+    with _write_backend(backend) as w:
+        applied, errors = commit_investment_edits(w, me["id"], rowmap, edited)
     if errors:
         st.warning("Some holdings were not changed: " + "; ".join(errors))
     if applied:
