@@ -162,6 +162,19 @@ class TestEditHelpers(unittest.TestCase):
     def tearDown(self):
         self.d.cleanup()
 
+    def test_entry_disabled_direction(self):
+        """Whole grid locked read-only (family); Kind/Category editable in Me."""
+        pf = pf_module()
+        cols = ["Date", "Member", "Mode", "Kind", "Category", "Particulars",
+                "Debit", "Credit"]
+        locked = pf._entry_disabled(cols, editable=True)
+        self.assertIsInstance(locked, list)
+        self.assertNotIn("Kind", locked)
+        self.assertNotIn("Category", locked)
+        self.assertIn("Date", locked)
+        self.assertEqual(len(locked), len(cols) - 2)
+        self.assertIs(pf._entry_disabled(cols, editable=False), True)
+
     def test_entry_edits_commit_and_ownership(self):
         pf = pf_module()
         b = FinanceBackend(path=self.db)

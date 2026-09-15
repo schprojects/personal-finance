@@ -245,6 +245,12 @@ def _cat_opts(backend, rr):
     return sorted(labels)
 
 
+def _entry_disabled(cols, editable):
+    """Columns locked in the entries editors: everything but Kind/Category
+    when editable; the whole grid when read-only (family view)."""
+    return [c for c in cols if c not in ("Kind", "Category")] if editable else True
+
+
 def entry_editor(backend, key, rr, editable):
     """Shared Kind + Category dropdown editor over a row list. Me scope edits
     (on_change -> on_entry_edited); Family stays display-only."""
@@ -258,14 +264,12 @@ def entry_editor(backend, key, rr, editable):
             "Particulars": r["part"][:120],
             "Debit": r["wd"] or None, "Credit": r["dep"] or None}
            for r in rr]
-    editable_cols = ("Kind", "Category")
     st.data_editor(
         tbl,
         key=key,
         on_change=on_entry_edited,
         args=(backend, key, rowmap),
-        disabled=([c for c in tbl[0] if c not in editable_cols]
-                  if not editable else True),
+        disabled=_entry_disabled(list(tbl[0]), editable),
         column_config={
             "Kind": st.column_config.SelectboxColumn(
                 "Kind", options=sorted(set(KINDS) | {r["kind"] for r in rr}),
