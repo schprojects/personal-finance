@@ -10,12 +10,22 @@ built on classified ICICI bank-statement CSVs and authored investment sheets.
 python3 -m venv .venv
 .venv/bin/pip install streamlit plotly pyyaml
 
-# classify bank statements -> output/ + repo/
-.venv/bin/python classify.py
+# bootstrap a member password (each member does this once)
+.venv/bin/python impex.py auth set-password --user [MEMBER]
+
+# import bank statements (existing/auto rules) and investment sheets
+.venv/bin/python impex.py import --user [MEMBER] --type bank-statement --mode existing
+.venv/bin/python impex.py import --user [MEMBER] --type investments
+# (add --mode auto to also consult OpenRouter and grow auto-rules.csv)
 
 # run the dashboard
 .venv/bin/streamlit run app.py
 ```
+
+Every `impex.py` subcommand asks for that member's password (or `--password-file
+PATH` / `--password-stdin`); a wrong password exits non-zero before anything is
+read or written. The database lives at `var/networth.db` (`FINANCE_DB` to
+override), and every import writes a run log under `var/logs/`.
 
 Open the URL streamlit prints (default `http://localhost:8501`).
 
@@ -46,37 +56,51 @@ data/<member>/bank-statements/<FY>/<file>.csv   raw statements
 data/<member>/investments/<file>.csv            authored holdings
 ```
 
-### Classifier (`classify.py`)
+### Importer / exporter (`impex.py`)
 
-The only writer. Reads every member's bank statements, classifies each
-transaction via the external, gitignored `rules.txt` (first-match-wins,
-) plus manual overrides (`manual.csv`), and writes numbered,
-non-destructive runs:
+The single gate for reads and writes (auth-first). Bank statements
+become `entries` and investment sheets become `investments` in the database;
+the only surviving CSV artifact is a reconcile-failure.
 
-| File | Purpose |
-|---|---|
-| `output/classified-<N>.csv` | all classified rows (all members) |
-| `output/review-<N>.csv` | rows needing a human ruling |
-| `output/<FY>/classified-<N>.csv` | per-FY slices |
-| `repo/classified-main-<N>.csv` | consolidated inventory (what the app reads) |
+```
+# bootstrap a member password (requires the current one once set)
+impex.py auth set-password --user [MEMBER]
 
-`N` = 1 + max run number already in `output/`, so re-runs never clobber old
-history. `data/` is never written to.
+# import, classified by the rules files
+impex.py import --user [MEMBER] --type bank-statement --mode existing
+impex.py import --user [MEMBER] --type bank-statement --mode auto   # + OpenRouter
+impex.py import --user [MEMBER]    --type investments
 
-A row in `review-<N>.csv` exits review after a human adds a rule for that
-payee, then re-runs the classifier:
+# read path: CSV exports, whole family by default (--user to narrow)
+impex.py export --login [MEMBER] --type bank --fy 2024-25 --out bank.csv
+impex.py export --login [MEMBER] --type investments
 
-```sh
-# see what's stuck in review, grouped by payee + suggested rule lines:
-.venv/bin/python review.py
-# e.g. paste    expense,My category,BIGPAYEE   into rules.txt, then:
-.venv/bin/python classify.py
+# safety net
+impex.py backup                 # -> backup/networth-<ts>.db
+impex.py restore --from backup/networth-<ts>.db
 ```
 
-`rules.txt` lives at the repo root but is **gitignored** — rule syntax is
-`KIND,CATEGORY,KEYWORDS [@mode:M] [@amt<=n|@amt>n]` (KEYWORDS: space-phrases,
-`|` = any-of; see the header comment in the file). If it is ever missing,
-`classify.py` fails loudly instead of guessing.
+Password sources: prompt, `--password-file PATH`, or `--password-stdin`
+(saved only in `backend/`, never argv/environ). A wrong password exits non-zero
+before anything is touched. Every import appends a run log under `var/logs/`.
+
+Rules (`--mode`): `existing` = manual-rules.csv (if present) then auto-rules.csv;
+`manual` / `auto` restrict to one file; `both` is identical to `existing`.
+First match wins; no match → the row is kept as `review` + `UNKNOWN` (editable
+in the dashboard). `auto` mode additionally classifies never-seen payees via
+OpenRouter (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL` default `openrouter/auto`)
+and appends the suggested keyword rules to `auto-rules.csv` (deduped).
+
+Import semantics: rows are keyed by account + date + particulars + deposit +
+withdrawal — created when new, updated when the classification changed (never
+for rows you manually overrode), superseded (skipped) when identical. Statement
+blocks must reconcile first (`opening + Σdep − Σwd == closing`); a FAILING
+block no longer stops the run — its rows go to `output/<FY>/failed-<N>.csv`
+(complete rows, deduped across runs) and the failure is logged.
+
+`classify.py`, `repo/`, `review-*.csv`, `rules.txt`, and `manual.csv` are
+retired. `data/` stays the import source; `auto-rules.csv` is the committed
+rule base.
 
 ### Dashboard (`app.py`)
 
@@ -115,10 +139,12 @@ no XIRR — the cell shows `—` and the caption explains why.
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Covers: `common` helpers, classifier rules / reconciliation / numbered outputs,
-holdings sheet parsing and return calculation, and the `backend/` database
-(migrations, PBKDF2 passwords + session tokens, entry create/update/skip,
-UNKNOWN editing, investment upsert).
+Covers: `common` helpers, the rule language and reconciliation math, holdings
+sheet parsing and return calculation, the `backend/` database (migrations,
+PBKDF2 passwords + session tokens, entry create/update/skip, UNKNOWN editing,
+investment upsert), and the `impex` CLI (import/upsert semantics,
+reconcile-FAIL → `failed-<N>.csv` dedup, investment typing, export scope and
+format, backup/restore round-trip, auth gate, OpenRouter rule extraction).
 
 ## Backend (database)
 
@@ -128,8 +154,7 @@ user_version`, owned by the `FinanceBackend` facade. It stores members and
 users, expense/income/investment entries, investment holdings, hashed
 passwords (PBKDF2), and opaque session tokens. Dates are ISO in the database;
 fy defaults to April and the session TTL to 10 minutes — both tunable in
-`settings`. The importer (`impex.py`, arriving in the next phase) is the bulk
-writer; the dashboard reads and edits it.
+`settings`. `impex.py` is the bulk writer; the dashboard reads and edits it.
 
 ## Files tracked in git
 
@@ -138,7 +163,9 @@ writer; the dashboard reads and edits it.
 | `common.py` | shared helpers |
 | `rules.py` | rule language (Rule / RuleSet) for `rules.txt`, `auto-rules.csv`, `manual-rules.csv` |
 | `auto-rules.csv` | LLM/generated rules (seeded from `rules.txt`, appended in auto mode) |
-| `classify.py` | legacy CSV classifier (retired when `impex.py` lands) |
+| `classify.py` | legacy CSV classifier (retired with the importer) |
+| `impex.py` | gated importer/exporter CLI (bank → entries, sheets → investments, export/backup/restore) |
+| `llm.py` | OpenRouter auto-mode client (stdlib-only) |
 | `scripts/seed_auto_rules.py` | regenerates `auto-rules.csv` from `rules.txt` (equivalence-checked) |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `app.py` | streamlit dashboard (view-only) |

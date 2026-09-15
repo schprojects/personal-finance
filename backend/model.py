@@ -81,6 +81,14 @@ class FinanceBackend:
         self.con.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user["id"],))
         self.con.commit()
 
+    def check_password(self, username, password):
+        """CLI gate: verify a password without creating a session row."""
+        user = db.one(self.con, "SELECT * FROM users WHERE username = ?", (username,))
+        if not user or not user["password_salt"]:
+            return False
+        return auth.verify_password(password, bytes(user["password_salt"]),
+                                    bytes(user["password_hash"]))
+
     def issue_session(self, username, password, ttl=None):
         user = db.one(self.con,
                       "SELECT * FROM users WHERE username = ?", (username,))
@@ -143,7 +151,9 @@ class FinanceBackend:
                        "SELECT * FROM categories ORDER BY kind, label")
 
     def get_or_create_category(self, label, kind):
-        label = (label or UNKNOWN).strip() or UNKNOWN
+        label = (label or "").strip()
+        if not label and kind in ("expense", "review"):
+            label = UNKNOWN
         self.con.execute(
             "INSERT OR IGNORE INTO categories (id, label, kind) VALUES (?, ?, ?)",
             (label, label, kind))
