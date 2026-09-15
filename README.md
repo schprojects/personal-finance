@@ -116,7 +116,20 @@ no XIRR — the cell shows `—` and the caption explains why.
 ```
 
 Covers: `common` helpers, classifier rules / reconciliation / numbered outputs,
-holdings sheet parsing and return calculation.
+holdings sheet parsing and return calculation, and the `backend/` database
+(migrations, PBKDF2 passwords + session tokens, entry create/update/skip,
+UNKNOWN editing, investment upsert).
+
+## Backend (database)
+
+`backend/` is the system of record: an sqlite database at
+`var/networth.db` (override with `FINANCE_DB`), versioned via `PRAGMA
+user_version`, owned by the `FinanceBackend` facade. It stores members and
+users, expense/income/investment entries, investment holdings, hashed
+passwords (PBKDF2), and opaque session tokens. Dates are ISO in the database;
+fy defaults to April and the session TTL to 10 minutes — both tunable in
+`settings`. The importer (`impex.py`, arriving in the next phase) is the bulk
+writer; the dashboard reads and edits it.
 
 ## Files tracked in git
 
@@ -124,18 +137,18 @@ holdings sheet parsing and return calculation.
 |---|---|
 | `common.py` | shared helpers |
 | `rules.py` | rule language (Rule / RuleSet) for `rules.txt` |
-| `classify.py` | classifier (the only writer) |
+| `classify.py` | legacy CSV classifier (retired when `impex.py` lands) |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `app.py` | streamlit dashboard (view-only) |
 | `holdings.py` | investment sheet parser + XIRR |
+| `backend/` | sqlite system of record (schema, model, auth) |
 | `tests/` | unit tests |
 | `specs/` | project contracts |
-| `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `members.yaml`, `rules.txt` |
+| `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `var/`, `backup/`, `dist/`, `members.yaml`, `rules.txt`, `manual-rules.csv` |
 
 ## Out of scope (for now)
 
 - YNAB-style budgeting (no budget data exists)
-- Database backend (plain CSVs are the truth by spec)
 - Historic/seasonal MF tracking
 - PDF export (kaleido via plotly `fig.write_image()` is a drop-in)
 - Calendar heatmap, monthly per-category drill tables

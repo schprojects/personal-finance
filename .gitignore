@@ -5,3 +5,8 @@ output/
 repo/
 members.yaml
 rules.txt
+manual-rules.csv
+var/
+backup/
+dist/
+dist.zip
