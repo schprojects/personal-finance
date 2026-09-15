@@ -85,6 +85,20 @@ Password sources: prompt, `--password-file PATH`, or `--password-stdin`
 (saved only in `backend/`, never argv/environ). A wrong password exits non-zero
 before anything is touched. Every import appends a run log under `var/logs/`.
 
+### Deployable bundle (`dist/`)
+
+```sh
+.venv/bin/python scripts/make_dist.py                # fresh bundle -> dist/ + dist.zip
+.venv/bin/python scripts/make_dist.py --with-db var/networth.db  # seed with a database
+```
+
+`dist/` ships the app + importer + rule engine + `requirements.txt` + this
+README, minus runtime data and secrets; running `streamlit run app.py` inside
+`dist/` works as here. `--with-db <path>` copies an sqlite db to
+`dist/var/networth.db`, which is exactly where the app and `impex.py` look by
+default, so the bundle starts on that data with no extra configuration
+. Both `dist/` and `dist.zip` are gitignored build artifacts.
+
 Rules (`--mode`): `existing` = manual-rules.csv (if present) then auto-rules.csv;
 `manual` / `auto` restrict to one file; `both` is identical to `existing`.
 First match wins; no match → the row is kept as `review` + `UNKNOWN` (editable
@@ -169,7 +183,9 @@ server-side; `Sign out` revokes the token.
 | `classify.py` | legacy CSV classifier (retired with the importer) |
 | `impex.py` | gated importer/exporter CLI (bank → entries, sheets → investments, export/backup/restore) |
 | `llm.py` | OpenRouter auto-mode client (stdlib-only) |
+| `requirements.txt` | pip deps for the dist bundle (streamlit, plotly, pyyaml) |
 | `scripts/seed_auto_rules.py` | regenerates `auto-rules.csv` from `rules.txt` (equivalence-checked) |
+| `scripts/make_dist.py` | assembles `dist/` + `dist.zip` |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `app.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
 | `holdings.py` | investment sheet parser + XIRR |
