@@ -50,7 +50,7 @@ def inr(x):
 
 
 def fy_of(d):
-    """FY label from a date, e.g. 2017-04-01 -> '2017-18'."""
+    """FY label from a date, e.g. 2024-04-01 -> '2024-25'."""
     yy = d.year if d.month >= 4 else d.year - 1
     return f"{yy}-{str(yy + 1)[-2:]}"
 

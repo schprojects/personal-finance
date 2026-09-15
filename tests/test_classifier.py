@@ -10,14 +10,14 @@ import classify
 
 
 FIXTURE_RULES = """\
-# fixture: mirrors the sentiment the real rules.txt expresses
+# fixture: mirrors the sentiment a typical rules file expresses
 expense,Bank & DP charges,@mode:BANK CHARGES
-expense,Transport & fuel,[MERCHANT] @amt<=10000
-expense,Loan & EMI,[MERCHANT] @amt>10000
+expense,Transport & fuel,MOONSOON @amt<=10000
+expense,Loan & EMI,MOONSOON @amt>10000
 income,,INT.PD
-investment,,EBA/MF-
-expense,Family support,[MEMBER]
-expense,Groceries,[MERCHANT]
+investment,,INVPLAT/MF-
+expense,Family support,RELATIV
+expense,Groceries,STARBAZAAR
 """
 
 
@@ -26,27 +26,27 @@ class TestRuleSet(unittest.TestCase):
         self.rs = classify.RuleSet.parse(FIXTURE_RULES)
 
     def test_grocery_kw(self):
-        self.assertEqual(self.rs.match("VPS/[MERCHANT]/20171231101939/0", ""),
+        self.assertEqual(self.rs.match("VPS/STARBAZAAR/20171231101939/0", ""),
                          ("expense", "Groceries"))
 
     def test_bank_charges_by_mode(self):
         self.assertEqual(self.rs.match("XX", "BANK CHARGES"),
                          ("expense", "Bank & DP charges"))
 
-    def test_chelvaya_threshold(self):
-        self.assertEqual(self.rs.match("UPI/chelvaya@ok/...", "", 5000),
+    def test_merchant_threshold(self):
+        self.assertEqual(self.rs.match("UPI/moonsoontaxi@ok/...", "", 5000),
                          ("expense", "Transport & fuel"))
-        self.assertEqual(self.rs.match("UPI/chelvaya@ok/...", "", 15000),
+        self.assertEqual(self.rs.match("UPI/moonsoontaxi@ok/...", "", 15000),
                          ("expense", "Loan & EMI"))
 
     def test_investment_excluded(self):
-        self.assertEqual(self.rs.match("EBA/MF-123", "")[0], "investment")
+        self.assertEqual(self.rs.match("INVPLAT/MF-123", "")[0], "investment")
 
     def test_unknown_goes_to_review(self):
         self.assertEqual(self.rs.match("RANDOM-UNKNOWN-PAYEE", ""), None)
 
     def test_family_support_before_generic(self):
-        self.assertEqual(self.rs.match("UPI/[MEMBER]/...", ""),
+        self.assertEqual(self.rs.match("UPI/RELATIV/...", ""),
                          ("expense", "Family support"))
 
 
@@ -71,11 +71,11 @@ def make_statement(path):
         w.writerow(["Statement of Transactions in SavingsNumber: XXXXXXXX3404"])
         w.writerow([])
         w.writerow(["DATE", "MODE", "PARTICULARS", "DEPOSITS", "WITHDRAWALS", "BALANCE"])
-        w.writerow(["01-04-2017", "", "B/F", 0, 0, 1000.00])
-        w.writerow(["02-04-2017", "", "UPI/srikeshavamart@ok/Payment", 0, 100, 900.00])
-        w.writerow(["03-04-2017", "", "ACH/INCOME", 250, 0, 1150.00])
-        w.writerow(["04-04-2017", "BANK CHARGES", "something", 0, 50, 1100.00])
-        w.writerow(["05-04-2017", "", "RANDOM-UNKNOWN-PAYEE", 0, 777, 323.00])
+        w.writerow(["01-04-2024", "", "B/F", 0, 0, 1000.00])
+        w.writerow(["02-04-2024", "", "UPI/starbazaar@ok/Payment", 0, 100, 900.00])
+        w.writerow(["03-04-2024", "", "ACH/INCOME", 250, 0, 1150.00])
+        w.writerow(["04-04-2024", "BANK CHARGES", "something", 0, 50, 1100.00])
+        w.writerow(["05-04-2024", "", "RANDOM-UNKNOWN-PAYEE", 0, 777, 323.00])
 
 
 class TestReconcile(unittest.TestCase):
@@ -95,28 +95,28 @@ class TestReconcile(unittest.TestCase):
 class TestRunOutputs(unittest.TestCase):
     def test_numbered_runs_and_consolidated_inventory(self):
         rows = [
-            {"member": "[MEMBER]", "file": "t.csv", "account": "A",
-             "date": "01-04-2017", "mode": "", "part": "P1",
+            {"member": "a", "file": "t.csv", "account": "A",
+             "date": "01-04-2024", "mode": "", "part": "P1",
              "dep": 0.0, "wd": 100.0, "bal": 900.0,
-             "kind": "expense", "category": "Groceries", "fy": "2017-18"},
-            {"member": "[MEMBER]", "file": "t.csv", "account": "A",
-             "date": "02-04-2017", "mode": "", "part": "P2",
+             "kind": "expense", "category": "Groceries", "fy": "2024-25"},
+            {"member": "a", "file": "t.csv", "account": "A",
+             "date": "02-04-2024", "mode": "", "part": "P2",
              "dep": 0.0, "wd": 40.0, "bal": 860.0,
-             "kind": "review", "category": "REVIEW", "fy": "2017-18"},
-            {"member": "[MEMBER]", "file": "t.csv", "account": "A",
-             "date": "01-04-2018", "mode": "", "part": "P3",
+             "kind": "review", "category": "REVIEW", "fy": "2024-25"},
+            {"member": "a", "file": "t.csv", "account": "A",
+             "date": "01-04-2025", "mode": "", "part": "P3",
              "dep": 0.0, "wd": 5.0, "bal": 855.0,
-             "kind": "expense", "category": "Utilities", "fy": "2018-19"},
+             "kind": "expense", "category": "Utilities", "fy": "2025-26"},
         ]
         with tempfile.TemporaryDirectory() as d:
             with contextlib.chdir(d):
                 self.assertEqual(classify.next_run_number(), 1)
                 by_fy = classify.write_run(1, rows)
-                self.assertEqual(set(by_fy), {"2017-18", "2018-19"})
+                self.assertEqual(set(by_fy), {"2024-25", "2025-26"})
                 self.assertTrue(os.path.exists("output/classified-1.csv"))
                 self.assertTrue(os.path.exists("output/review-1.csv"))
                 self.assertTrue(os.path.exists("repo/classified-main-1.csv"))
-                self.assertTrue(os.path.exists("output/2017-18/classified-1.csv"))
+                self.assertTrue(os.path.exists("output/2024-25/classified-1.csv"))
 
                 with open("output/review-1.csv", newline="") as f:
                     review = list(csv.DictReader(f))
@@ -127,8 +127,8 @@ class TestRunOutputs(unittest.TestCase):
                         return list(csv.DictReader(f))
 
                 main = rows_of("repo/classified-main-1.csv")
-                slices = rows_of("output/2017-18/classified-1.csv") + \
-                    rows_of("output/2018-19/classified-1.csv")
+                slices = rows_of("output/2024-25/classified-1.csv") + \
+                    rows_of("output/2025-26/classified-1.csv")
                 self.assertEqual(len(main), len(rows))
                 self.assertEqual(len(main), len(slices))
 

@@ -6,9 +6,10 @@ Usage:
     python scripts/make_dist.py --with-db PATH # seed dist/var/networth.db
 
 Ships: personal-finance.py, impex.py, llm.py, rules.py, common.py, holdings.py,
-backend/ (schema/model/auth/db/paths), requirements.txt, README.md,
-auto-rules.csv. Runtime dirs (data/, var/, backup/, output/, tests/,
-specs/, members.yaml) are intentionally excluded.
+classify.py (impex's statement parser), backend/ (schema/model/auth/db/paths),
+requirements.txt, README.md, auto-rules.csv. Runtime dirs (data/, var/,
+backup/, output/, tests/, specs/, members.yaml) are
+intentionally excluded.
 """
 import argparse
 import shutil
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
 SOURCES = ["personal-finance.py", "impex.py", "llm.py", "rules.py", "common.py",
-           "holdings.py", "backend", "auto-rules.csv", "README.md",
+           "holdings.py", "classify.py", "backend", "auto-rules.csv", "README.md",
            "requirements.txt"]
 
 

@@ -16,7 +16,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from backend import FinanceBackend
+from backend import FinanceBackend, UNKNOWN
 from common import BASELINE_EXCLUDED, inr, payee_key
 from holdings import absolute_return_pct, xirr
 
@@ -179,14 +179,14 @@ def page_overview(rows, f):
     spend = [r for r in filtered(rows, f) if r["kind"] in ("expense", "refund")]
     agg = frame(spend)
     net = sum(agg.values())
-    rev = [r for r in filtered(rows, f) if r["kind"] == "review"]
+    rev = [r for r in filtered(rows, f) if r["category"] == UNKNOWN]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Net spend", inr(net))
     c2.metric("Per year", inr(net / len({k[0] for k in agg})) if agg else "₹0")
     top = max(agg.items(), key=lambda kv: kv[1]) if agg else None
     c3.metric("Top category", (top[0][1] if top else "—"),
               inr(top[1]) if top else "")
-    c4.metric("Unreviewed", inr(sum(r["wd"] for r in rev)) + f"  ({len(rev)} rows)")
+    c4.metric("Unreviewed", inr(sum(r["wd"] + r["dep"] for r in rev)) + f"  ({len(rev)} rows)")
 
     fis = sorted({r["fy"] for r in rows})
     focus = st.pills("Focus year", fis, default=fis[-1], selection_mode="single")
@@ -259,7 +259,7 @@ def page_overview(rows, f):
 
 def page_transactions(rows, f):
     q = st.text_input("Search particulars / payee / category", key="q")
-    only_review = st.toggle("Review rows only", key="only_rev")
+    only_review = st.toggle("UNKNOWN rows only", key="only_rev")
     rr = filtered(rows, f)
     if q:
         ql = q.lower()
@@ -267,7 +267,7 @@ def page_transactions(rows, f):
               if ql in r["part"].lower() or ql in r["payee"].lower()
               or ql in r["category"].lower()]
     if only_review:
-        rr = [r for r in rr if r["kind"] == "review"]
+        rr = [r for r in rr if r["category"] == UNKNOWN]
     rr.sort(key=lambda r: (r["date"], r["ym"]), reverse=True)
     tbl = [{"Date": r["date_s"], "Member": r["member"], "Mode": r["mode"],
             "Category": r["category"], "Kind": r["kind"],
@@ -329,11 +329,12 @@ def page_categories(rows, f):
 
 
 def page_review(backend, rows, f, me, editable):
-    """UNKNOWN rows grouped by payee; the owner may classify a row."""
-    rev = [r for r in filtered(rows, f) if r["kind"] == "review"]
-    c1, c2 = st.columns(2)
+    """UNKNOWN-category rows grouped by payee; the owner may classify a row."""
+    rev = [r for r in filtered(rows, f) if r["category"] == UNKNOWN]
+    c1, c2, c3 = st.columns(3)
     c1.metric("Rows", len(rev))
-    c2.metric("Amount", inr(sum(r["wd"] for r in rev)))
+    c2.metric("Credit", inr(sum(r["dep"] for r in rev)))
+    c3.metric("Debit", inr(sum(r["wd"] for r in rev)))
     if not rev:
         st.info("Nothing in review for these filters.")
         return
@@ -344,7 +345,7 @@ def page_review(backend, rows, f, me, editable):
     for r in rev:
         a = grp.setdefault(r["payee"], [0, 0.0])
         a[0] += 1
-        a[1] += r["wd"]
+        a[1] += r["wd"] + r["dep"]
     grp = sorted(grp.items(), key=lambda kv: -kv[1][1])
     fig = px.bar(x=[k for k, _ in grp][:40], y=[v[1][1] for v in grp[:40]],
                  labels={"x": "Payee", "y": "₹"})
@@ -357,9 +358,11 @@ def page_review(backend, rows, f, me, editable):
     rows_p = [r for r in rev if r["payee"] == pick]
     st.dataframe(
         [{"id": r["id"], "Date": r["date_s"], "Particulars": r["part"][:120],
-          "Member": r["member"], "Amount": r["wd"]} for r in rows_p],
+          "Member": r["member"], "Credit": r["dep"], "Debit": r["wd"]}
+         for r in rows_p],
         width="stretch", height=280, hide_index=True,
-        column_config={"Amount": st.column_config.NumberColumn(format="₹ %d")},
+        column_config={"Credit": st.column_config.NumberColumn(format="₹ %d"),
+                       "Debit": st.column_config.NumberColumn(format="₹ %d")},
     )
 
     st.markdown("#### Classify a row")

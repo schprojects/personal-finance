@@ -2,10 +2,10 @@
 """Parse members' investment sheets from data/<member>/investments/.
 
 Two sheet shapes (auto-detected by header):
-  - MF detail sheet (e.g. [MF-PORTFOLIO].csv): per-scheme folio rows with
+  - MF detail sheet (e.g. mfs-<member>.csv): per-scheme folio rows with
     cost value, units, latest NAV + date and market value.
-  - Label/value sheet (e.g. [SHARES-PORTFOLIO]-gold.csv, [ALL-INVESTMENTS].csv): "category, ₹"
-    rows, with an optional stated "Total" row used for cross-checks.
+  - Label/value sheet (e.g. assets-<member>.csv): "category, ₹" rows,
+    with an optional stated "Total" row used for cross-checks.
 
 Pure stdlib — no streamlit/plotly, so it is unit-testable on its own.
 """

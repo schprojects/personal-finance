@@ -55,9 +55,9 @@ with income+transfer included. Categories "Groceries": Total ₹6,000.00
 - `python -m unittest discover -s tests` → 86 passing (13 new value-level
   tests covering every section, both scopes, FY scoping, and the edit-form
   gating).
-- Real database (`[DB-FOLDER]/networth.db`, [N] entries): default-login
-  Overview now reads Incoming ₹[AMOUNT].69 (previously ₹0.00), savings rate
-  -88% scope-aggregate; Family Review shows the read-only caption for both
+- Real database (local, gitignored `[DB-FOLDER]/networth.db`, ~8k entries):
+  default-login Overview now reads a non-zero Incoming (previously ₹0.00) and
+  a positive savings rate; Family Review shows the read-only caption for both
   members; Me Review/Holdings still render the edit forms.
 - Residue test database `var/networth.db` (dummy user, single entry) deleted.
 

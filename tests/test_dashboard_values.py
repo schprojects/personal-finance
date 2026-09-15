@@ -301,11 +301,12 @@ class TestReviewReadOnly(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
             at = self._at("Family")
             self.assertEqual(at.metric[0].value, "1")
-            self.assertEqual(at.metric[1].value, "₹1,200.00")
+            self.assertEqual(at.metric[1].value, "₹0.00")   # Credit
+            self.assertEqual(at.metric[2].value, "₹1,200.00")  # Debit
             at.radio(key="scope").set_value("Me")
             at.run()
             self.assertEqual(at.metric[0].value, "1")
-            self.assertEqual(at.metric[1].value, "₹1,200.00")
+            self.assertEqual(at.metric[2].value, "₹1,200.00")
 
     def test_family_view_is_read_only(self):
         with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):

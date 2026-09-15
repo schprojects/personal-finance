@@ -6,6 +6,8 @@ repo/
 members.yaml
 rules.txt
 manual-rules.csv
+auto-rules.csv
+review_Upis.txt
 var/
 backup/
 dist/

@@ -29,8 +29,8 @@ def make_statement(path, rows, closing_multiplier=1.0):
 
 
 RULES_CSV = (
-    "expense,Groceries,[MERCHANT]\n"
-    "expense,Transport & fuel,[MERCHANT] @amt<=10000\n"
+    "expense,Groceries,STARBAZAAR\n"
+    "expense,Transport & fuel,MOONSOON @amt<=10000\n"
     "income,,ACH/INCOME\n"
 )
 
@@ -56,7 +56,7 @@ class TestImportBankStatements(unittest.TestCase):
     def test_imports_classifies_and_is_idempotent(self):
         make_statement(os.path.join(self.a_dir, "s.csv"), [
             ["01-04-2024", "", "B/F", 0, 0, 1000.00],
-            ["02-04-2024", "", "UPI/[MERCHANT] MART@okpay", 0, 100, 900.00],
+            ["02-04-2024", "", "UPI/STARBAZAAR MART@okpay", 0, 100, 900.00],
             ["03-04-2024", "", "ACH/INCOME", 250, 0, 1150.00],
             ["04-04-2024", "", "RANDOM-UNKNOWN-PAYEE", 0, 777, 373.00],
         ])
@@ -66,7 +66,8 @@ class TestImportBankStatements(unittest.TestCase):
         cats = {(r["kind"], r["category"]) for r in rows}
         self.assertIn(("expense", "Groceries"), cats)
         self.assertIn(("income", ""), cats)
-        self.assertIn(("review", "UNKNOWN"), cats)
+        # RANDOM-UNKNOWN-PAYEE hits the default fallback: debit -> expense/UNKNOWN
+        self.assertIn(("expense", "UNKNOWN"), cats)
         self.assertEqual([r["fy"] for r in rows], ["2024-25"] * 3)
         c2 = impex.import_bank_statements(self.backend, "a", self.rules)
         self.assertEqual(c2["skipped"], 3)
@@ -75,7 +76,7 @@ class TestImportBankStatements(unittest.TestCase):
         # opening 1000, one 100 withdrawal, but closing says 1000 -> FAIL
         make_statement(os.path.join(self.a_dir, "bad.csv"), [
             ["01-04-2024", "", "B/F", 0, 0, 1000.00],
-            ["02-04-2024", "", "UPI/srikeshavamart@ok/Payment", 0, 100, 1000.00],
+            ["02-04-2024", "", "UPI/starbazaar@ok/Payment", 0, 100, 1000.00],
         ])
         c = impex.import_bank_statements(self.backend, "a", self.rules)
         self.assertEqual(c["created"], 0)
@@ -84,7 +85,7 @@ class TestImportBankStatements(unittest.TestCase):
         with open(f, newline="") as fh:
             got = list(csv.DictReader(fh))
         self.assertEqual(len(got), 1)
-        self.assertEqual(got[0]["PARTICULARS"], "UPI/srikeshavamart@ok/Payment")
+        self.assertEqual(got[0]["PARTICULARS"], "UPI/starbazaar@ok/Payment")
         impex.import_bank_statements(self.backend, "a", self.rules)
         self.assertFalse(os.path.exists(
             os.path.join("output", "2024-25", "failed-2.csv")))
@@ -93,14 +94,14 @@ class TestImportBankStatements(unittest.TestCase):
         # @amt qualifier + deposits-become-credit
         make_statement(os.path.join(self.a_dir, "s.csv"), [
             ["01-04-2024", "", "B/F", 0, 0, 1000.00],
-            ["02-04-2024", "", "UPI/chelvaya@ok/x", 0, 500, 500.00],
-            ["03-04-2024", "", "UPI/chelvaya@ok/y", 0, 20000, -19500.00],
+            ["02-04-2024", "", "UPI/moonsoontaxi@ok/x", 0, 500, 500.00],
+            ["03-04-2024", "", "UPI/moonsoontaxi@ok/y", 0, 20000, -19500.00],
         ])
         impex.import_bank_statements(self.backend, "a", self.rules)
         rows = self.backend.entries(user_ids=["a"])
         by_part = {r["particulars"]: r for r in rows}
-        self.assertEqual(by_part["UPI/chelvaya@ok/x"]["category"], "Transport & fuel")
-        self.assertEqual(by_part["UPI/chelvaya@ok/y"]["category"], "UNKNOWN")
+        self.assertEqual(by_part["UPI/moonsoontaxi@ok/x"]["category"], "Transport & fuel")
+        self.assertEqual(by_part["UPI/moonsoontaxi@ok/y"]["category"], "UNKNOWN")
 
     def test_investments_import(self):
         inv = os.path.join(self.d.name, "data", "a", "investments")
@@ -181,14 +182,14 @@ class TestLlmParseAndAppend(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "auto-rules.csv")
             with open(path, "w") as f:
-                f.write("expense,Groceries,[MERCHANT]\n")
+                f.write("expense,Groceries,STARBAZAAR\n")
             added = impex.append_auto_rules(path, {0: "Groceries", 1: "Fuel"},
-                                            ["[MERCHANT]", "PETROL|DIESEL"])
+                                            ["STARBAZAAR", "PETROL|DIESEL"])
             self.assertEqual(added, 1)
             with open(path) as f:
                 text = f.read()
             self.assertIn("PETROL|DIESEL", text)
-            self.assertEqual(text.count("[MERCHANT]"), 1)
+            self.assertEqual(text.count("STARBAZAAR"), 1)
 
 
 class TestCliGate(unittest.TestCase):

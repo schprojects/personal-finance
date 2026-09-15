@@ -41,13 +41,13 @@ class TestMembersAndFy(unittest.TestCase):
     def test_seed_and_fy(self):
         with tempfile.TemporaryDirectory() as d:
             b = make_backend(d)
-            b.seed_members([{"name": "[MEMBER]", "data_dir": "data/[MEMBER]"},
-                            {"name": "[MEMBER]", "data_dir": "data/[MEMBER]"}])
+            b.seed_members([{"name": "alex", "data_dir": "data/alex"},
+                            {"name": "blair", "data_dir": "data/blair"}])
             users = b.users()
             self.assertEqual({u["username"] for u in users},
-                             {"[MEMBER]", "[MEMBER]"})
-            self.assertEqual(b.family_user_ids("[MEMBER]"),
-                             ["[MEMBER]", "[MEMBER]"])
+                             {"alex", "blair"})
+            self.assertEqual(b.family_user_ids("alex"),
+                             ["alex", "blair"])
             self.assertEqual(b.fy_of("2025-04-01"), "2025-26")
             self.assertEqual(b.fy_of("2025-03-31"), "2024-25")
             b.set_setting("fy_start_month", "1")

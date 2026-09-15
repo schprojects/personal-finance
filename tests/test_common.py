@@ -1,4 +1,5 @@
 """Unit tests for common.py (helpers shared by classifier and app)."""
+import os
 import unittest
 
 from common import fy_of, fy_of_str, inr, money, payee_key, load_members
@@ -6,9 +7,9 @@ from common import fy_of, fy_of_str, inr, money, payee_key, load_members
 
 class TestFy(unittest.TestCase):
     def test_boundaries(self):
-        self.assertEqual(fy_of_str("01-04-2017"), "2017-18")
-        self.assertEqual(fy_of_str("31-03-2018"), "2017-18")
-        self.assertEqual(fy_of_str("30-04-2018"), "2018-19")
+        self.assertEqual(fy_of_str("01-04-2024"), "2024-25")
+        self.assertEqual(fy_of_str("31-03-2025"), "2024-25")
+        self.assertEqual(fy_of_str("30-04-2025"), "2025-26")
 
     def test_fy_of_date(self):
         import datetime as dt
@@ -27,27 +28,25 @@ class TestMoneyInr(unittest.TestCase):
 
 class TestPayeeKey(unittest.TestCase):
     def test_upi(self):
-        self.assertEqual(payee_key("UPI/srikeshavamart@ok/..."),
-                         "UPI:srikeshavamart")
+        self.assertEqual(payee_key("UPI/salmar@ok/..."),
+                         "UPI:salmar")
 
     def test_bil_provider_token(self):
-        self.assertEqual(payee_key("BIL/[REDACTED]/bescom_mar18/BESCOM_LICI6195"),
-                         "BIL:bescom_mar18")
-        self.assertEqual(payee_key("BIL/ONL/[REDACTED]/TECHPROCES/[REDACTED]"),
-                         "BIL:TECHPROCES")
+        self.assertEqual(payee_key("BIL/[REDACTED]/bescom_jun24/BESCOM_678901"),
+                         "BIL:bescom_jun24")
+        self.assertEqual(payee_key("BIL/ONL/[REDACTED]/EXCO/1234567890"),
+                         "BIL:EXCO")
 
     def test_bank_transfer(self):
         self.assertTrue(payee_key("NEFT-HDFCN520250403...").startswith("BANK:"))
 
 
 class TestMembers(unittest.TestCase):
-    def test_loads_[MEMBER]_and_[MEMBER](self):
+    def test_loads_all_real_members(self):
         members = load_members()
-        names = {m["name"] for m in members}
-        self.assertEqual(names, {"[MEMBER]", "[MEMBER]"})
-        self.assertTrue(all(m["data_dir"].endswith("data/[MEMBER]")
-                            or m["data_dir"].endswith("data/[MEMBER]")
-                            for m in members))
+        self.assertGreaterEqual(len(members), 1)
+        for m in members:
+            self.assertTrue(os.path.isdir(m["data_dir"]))
 
 
 if __name__ == "__main__":

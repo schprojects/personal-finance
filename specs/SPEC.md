@@ -19,7 +19,7 @@ Personal & family net-worth / expense tracker ("Personal Finance"). `README.md` 
     - data /
        - <member-name>
          - bank-statements 
-            - <FY> (example : [FY])
+            - <FY> (example: 2024-25)
                     - <name>.csv
          - investments
             - <name.csv> (may be mutiple)

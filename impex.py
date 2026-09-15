@@ -106,16 +106,16 @@ def rules_for_mode(mode, manual_path):
     manual = manual_path or (DEFAULT_MANUAL
                              if os.path.exists(DEFAULT_MANUAL) else None)
     if mode in ("manual",):
-        missing = manual and not os.path.exists(manual)
+        if not manual:
+            sys.exit("manual mode needs a rules file (--manual-rules PATH)")
         rs = RuleSet.combined(manual, None)
     elif mode in ("auto",):
         rs = RuleSet.combined(None, AUTO_RULES)
     else:  # existing, both
         rs = RuleSet.combined(manual, AUTO_RULES)
-    if mode == "manual" and not manual:
-        sys.exit("manual mode needs a rules file (--manual-rules PATH)")
     if not rs.rules:
-        sys.exit("no classification rules available for this mode")
+        print("  no rule files present; unmatched rows fall back to default-kind "
+              "(credit=income, debit=expense, category UNKNOWN)")
     return rs
 
 
@@ -229,7 +229,8 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
                 continue
             for t in txs:
                 date_iso = _iso(t["date"])
-                rr = rules.match(t["part"], t["mode"], t["wd"] or t["dep"])
+                dir_ = "dep" if t["dep"] > 0 else "wd"
+                rr = rules.match(t["part"], t["mode"], t["wd"] or t["dep"], dir_=dir_)
                 prep.append({"account": acct, "date": date_iso, "mode": t["mode"],
                              "part": t["part"], "dep": t["dep"], "wd": t["wd"],
                              "bal": t["bal"], "file": os.path.basename(path),
@@ -258,7 +259,10 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
 
     for p in prep:
         if not p["matched"]:
-            kind, cat = "review", UNKNOWN
+            if p["dep"] > 0:
+                kind, cat = "income", ""
+            else:
+                kind, cat = "expense", UNKNOWN
         else:
             kind, cat = p["match"]
             if p["dep"] > 0 and p["wd"] == 0 and kind in ("expense", "review"):

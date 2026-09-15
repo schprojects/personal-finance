@@ -3,19 +3,22 @@
 since the database spec, manual-rules.csv / auto-rules.csv.
 
 Syntax of a rules file (first matching line wins):
-    KIND,CATEGORY,<keywords> [@mode:<M>] [@amt<=<n>|@amt><n>]
+    KIND,CATEGORY,<keywords> [@mode:<M>] [@amt<=<n>|@amt><n>] [@dir:dep|wd]
   KIND       income|investment|transfer|reimbursed|refund|charge|expense
   CATEGORY   display category; non-empty always classifies as an expense
   keywords   PARTICULARS (uppercased) must contain ANY of these words,
              '|' = any-of; a trailing space is a sentinel ("REF " != "REFILL")
   @mode:<M>  restrict to row MODE == M (uppercased)
   @amt<=<n>  amount must be <= n     @amt><n>  amount must be > n
+  @dir:dep   apply only to credits (money into the account)
+  @dir:wd    apply only to debits (money out of the account)   [default: both]
 Lines starting with '#' are comments. .txt files are parsed line-by-line;
 .csv files via the csv module (KIND,CATEGORY,EXPRESSION per row).
 Rule precedence is manual-rules.csv first, then auto-rules.csv
 (RuleSet.combined).
 
-Amount = the row's outgoing amount (withdrawal, or deposit if none).
+Amount = the row's outgoing amount (withdrawal, or deposit if none);
+direction = 'dep' when the row is a credit, 'wd' when it is a debit.
 """
 import csv
 import glob
@@ -28,15 +31,17 @@ from common import payee_key
 class Rule:
     """One match rule; all constraints must hold for it to fire."""
 
-    def __init__(self, kind, category, keywords=(), mode=None, amt_min=None, amt_max=None):
+    def __init__(self, kind, category, keywords=(), mode=None, amt_min=None, amt_max=None,
+             dir_=None):
         self.kind = kind
         self.category = category
         self.keywords = tuple(keywords)   # ANY-of must appear in particulars
         self.mode = mode                  # exact MODE when set
         self.amt_min = amt_min            # amount > amt_min
         self.amt_max = amt_max            # amount <= amt_max
+        self.dir_ = dir_                  # dep/wd, or None = both
 
-    def match(self, part, mode, amt=0.0):
+    def match(self, part, mode, amt=0.0, dir_=None):
         u = (part or "").upper()
         if self.keywords and not any(k in u for k in self.keywords):
             return False
@@ -45,6 +50,8 @@ class Rule:
         if self.amt_min is not None and not amt > self.amt_min:
             return False
         if self.amt_max is not None and not amt <= self.amt_max:
+            return False
+        if self.dir_ is not None and dir_ is not None and self.dir_ != dir_:
             return False
         return True
 
@@ -99,10 +106,10 @@ class RuleSet:
                 rules += cls.from_csv(p).rules
         return cls(rules)
 
-    def match(self, part, mode, amt=0.0):
+    def match(self, part, mode, amt=0.0, dir_=None):
         """(kind, category), or None when no rule fires (goes to review)."""
         for r in self.rules:
-            if r.match(part, mode, amt):
+            if r.match(part, mode, amt, dir_=dir_):
                 return ("expense", r.category) if r.category else (r.kind, "")
         return None
 
@@ -168,7 +175,7 @@ def _rule_from_expr(kind, category, expr):
     # (a trailing space is a sentinel, e.g. "REF " must not match "REFILL").
     parts = re.split(r"(?:\s+|^)@", expr)
     keywords = [kw for kw in parts[0].split("|") if kw]
-    mode = amt_min = amt_max = None
+    mode = amt_min = amt_max = dir_ = None
     for q in parts[1:]:
         q = q.strip()
         if q.startswith("mode:"):
@@ -177,6 +184,10 @@ def _rule_from_expr(kind, category, expr):
             amt_max = float(q[5:])
         elif q.startswith("amt>"):
             amt_min = float(q[4:])
+        elif q.startswith("dir:"):
+            dir_ = q[4:].lower()
+            if dir_ not in ("dep", "wd"):
+                raise ValueError(f"rules file: dir must be dep or wd, got {q!r}")
         else:
             raise ValueError(f"rules file: unknown qualifier {q!r}")
-    return Rule(kind, category, keywords, mode, amt_min, amt_max)
+    return Rule(kind, category, keywords, mode, amt_min, amt_max, dir_)

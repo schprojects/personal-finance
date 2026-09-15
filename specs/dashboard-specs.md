@@ -17,6 +17,8 @@ To build an application which presents investments and bank-transactions in a ni
 - it should have the ability to show details per person and also for the family with an option to choose
 - in the family view nothing should be editable
 - every view must aggregate the items for that user and for that scope
+- there should be a view to create new categories and kinds
+- all the entries should be editable via a new MODE called EDIT mode so that the entries can be re-classified
 
 # Out of scope
 - create historic records for MFs at monthly cadence

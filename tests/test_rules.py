@@ -9,7 +9,7 @@ from rules import Rule, RuleSet, RuleSuggester, parse_line
 CSV_RULES = (
     "# comment first row\n"
     "expense,Bank & DP charges,@mode:BANK CHARGES\n"
-    "expense,Transport & fuel,[MERCHANT]|[MERCHANT] @amt<=10000\n"
+    "expense,Transport & fuel,MOONSOON|MOONSOONM @amt<=10000\n"
     'refund,,"REF "\n'
     "income,,INT.PD\n"
 )
@@ -17,13 +17,13 @@ CSV_RULES = (
 
 class TestParseLine(unittest.TestCase):
     def test_simple_keyword(self):
-        r = parse_line("expense,Groceries,[MERCHANT]")
+        r = parse_line("expense,Groceries,STARBAZAAR")
         self.assertEqual((r.kind, r.category, r.keywords),
-                         ("expense", "Groceries", ("[MERCHANT]",)))
+                         ("expense", "Groceries", ("STARBAZAAR",)))
 
     def test_any_of_pipe(self):
-        r = parse_line("expense,Transport & fuel,[MERCHANT]|[MERCHANT] @amt<=10000")
-        self.assertEqual(r.keywords, ("[MERCHANT]", "[MERCHANT]"))
+        r = parse_line("expense,Transport & fuel,MOONSOON|MOONSOONM @amt<=10000")
+        self.assertEqual(r.keywords, ("MOONSOON", "MOONSOONM"))
         self.assertEqual(r.amt_max, 10000)
         self.assertIsNone(r.amt_min)
 
@@ -63,13 +63,39 @@ class TestMatch(unittest.TestCase):
     def test_sentinel_space_not_within_word(self):
         # "REF " (trailing space) must not match REFILL
         self.assertFalse(Rule("refund", "", ("REF ",)).match("CYLINDER_REFILL", ""))
-        self.assertTrue(Rule("refund", "", ("REF ",)).match("REF [MERCHANT]", ""))
+        self.assertTrue(Rule("refund", "", ("REF ",)).match("REF STARBAZAAR", ""))
+
+    def test_dir_qualifier_dep_and_wd(self):
+        rs = RuleSet.parse("income,,ACH/ @dir:dep\n"
+                           "expense,,ACH/ @dir:wd\n")
+        self.assertEqual(rs.match("ACH/ICICI SA", "", 0, dir_="dep"), ("income", ""))
+        self.assertEqual(rs.match("ACH/P2PCO", "", 500, dir_="wd"), ("expense", ""))
+
+    def test_dir_defaults_to_both(self):
+        rs = RuleSet.parse("transfer,,PAY/\n")
+        self.assertEqual(rs.match("PAY/PAYT/Self", "", 1.0, dir_="dep"), ("transfer", ""))
+        self.assertEqual(rs.match("PAY/PAYT/Self", "", 1.0, dir_="wd"), ("transfer", ""))
+
+    def test_dir_same_keyword_two_rules_directions(self):
+        rs = RuleSet.parse("investment,,BROKCO @dir:wd\n"
+                           "income,,BROKCO @dir:dep\n")
+        self.assertEqual(rs.match("UPI/iclbrokco@yes/BUY", "", 5, dir_="wd"),
+                         ("investment", ""))
+        self.assertEqual(rs.match("redemption BROKCO", "", 0, dir_="dep"),
+                         ("income", ""))
+
+    def test_dir_parsed_from_line(self):
+        self.assertEqual(parse_line("income,,X @dir:dep").dir_, "dep")
+        self.assertEqual(parse_line("income,,X @dir:wd").dir_, "wd")
+        self.assertIsNone(parse_line("income,,X").dir_)
+        with self.assertRaises(ValueError):
+            parse_line("income,,X @dir:sideways")
 
     def test_no_keyword_no_qualifier_matches_everything(self):
         self.assertTrue(Rule("cash", "", ()).match("ANYTHING", ""))
 
     def test_empty_category_classifies_as_non_expense(self):
-        self.assertEqual(Rule("investment", "", ("EBA/MF",)).match("EBA/MF-1", ""), True)
+        self.assertEqual(Rule("investment", "", ("INVPLAT/MF",)).match("INVPLAT/MF-1", ""), True)
 
 
 class TestCsvRules(unittest.TestCase):
@@ -90,9 +116,9 @@ class TestCsvRules(unittest.TestCase):
             l + "\n" for l in CSV_RULES.splitlines() if l and not l.startswith("#")))
         csv_rs = RuleSet.from_csv(self.csv)
         self.assertEqual([r.kind for r in csv_rs.rules], [r.kind for r in txt.rules])
-        self.assertEqual(csv_rs.match("UPI/chelvaya@ok", "", 500),
+        self.assertEqual(csv_rs.match("UPI/moonsoontaxi@ok", "", 500),
                          ("expense", "Transport & fuel"))
-        self.assertEqual(csv_rs.match("REF [MERCHANT]", ""), ("refund", ""))
+        self.assertEqual(csv_rs.match("REF STARBAZAAR", ""), ("refund", ""))
         kw = [r.keywords for r in csv_rs.rules]
         self.assertIn(("REF ",), kw)  # sentinel survives csv round-trip
 
