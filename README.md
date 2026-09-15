@@ -1,7 +1,8 @@
 # Expense Tracker
 
-View-only family expense and net-worth dashboard — Simplifi / Mint style,
-built on classified ICICI bank-statement CSVs and authored investment sheets.
+Family expense and net-worth dashboard — Simplifi / Mint style, backed by an
+sqlite database (see **Backend**) that the importer feeds and members edit
+(classify UNKNOWN rows, refresh holding values) with password login.
 
 ## Quick start
 
@@ -18,7 +19,7 @@ python3 -m venv .venv
 .venv/bin/python impex.py import --user [MEMBER] --type investments
 # (add --mode auto to also consult OpenRouter and grow auto-rules.csv)
 
-# run the dashboard
+# run the dashboard -- sign in with your member password
 .venv/bin/streamlit run app.py
 ```
 
@@ -104,28 +105,25 @@ rule base.
 
 ### Dashboard (`app.py`)
 
-Reads the latest `repo/classified-main-*.csv` on every render. Sidebar
-filters (FY, category, kind, max amount) and a "Daily-spend baseline" toggle
-apply across five sections:
+Password-login pages (see **Backend** for the session store). Reads `entries` /
+`investments` from the database on every render; a sidebar "Family / me" radio
+scopes reads and a member can edit only their own rows. Sidebar filters (FY,
+category, kind, mode, max amount) and a "Daily-spend baseline" toggle apply
+across five sections:
 
 | Section | What it shows |
 |---|---|
 | **Overview** | net spend, savings rate, income vs spend per FY, top category, unreviewed count; focus-year monthly trend vs prior FY + cumulative spend line; top-8 category donut |
 | **Transactions** | full classified table: search, kind/category filter, review-only toggle, ₹-formatted |
 | **Categories** | per-category monthly trend across FYs + top payees within it |
-| **Review** | unresolved rows grouped by payee (count + ₹), per-payee drill, and a copy-paste `rules.txt` line to auto-classify that payee |
-| **Holdings** | household net worth from authored investment sheets; MF scheme tables (units, cost, latest NAV, absolute return % **+ XIRR**); label/value asset tables; per-member donut + largest-schemes bar |
+| **Review** | UNKNOWN rows grouped by payee (count + ₹), per-payee drill, and a classify form that sets kind + category on the member's own row |
+| **Holdings** | household net worth from the investments table; MF schemes (units, cost, latest NAV, absolute return % **+ XIRR**); cash/asset rows; per-member donut + largest-schemes bar; an edit form to refresh the latest value + as-of date of an owned holding |
 
-Holdings parses two auto-detected sheet shapes:
-- **MF detail** (has `scheme name` + `market value` columns) -- per-scheme table
-  with cost value, units, latest NAV + date, and return %
-- **Label/value** (everything else) -- "category, ₹" rows with optional
-  stated-Total cross-check
-
-To see **XIRR (annualized)** for a scheme, add a `Purchase Date` column
-(`dd-mm-yyyy`) to its MF sheet (e.g. `data/[MEMBER]/investments/[MF-PORTFOLIO].csv`):
-the app then values cost at that date vs market at the latest NAV. No column,
-no XIRR — the cell shows `—` and the caption explains why.
+Edits commit `manual_override`, so a later re-import never touches them.
+To see **XIRR (annualized)** for a scheme, its MF sheet must author a
+`Purchase Date` column (`dd-mm-yyyy`, e.g. in
+`data/[MEMBER]/investments/[MF-PORTFOLIO].csv`): the app values cost at that date vs
+market at the latest NAV. No column, no XIRR — the cell shows `—`.
 
 ### Shared logic (`common.py`)
 
@@ -142,9 +140,11 @@ no XIRR — the cell shows `—` and the caption explains why.
 Covers: `common` helpers, the rule language and reconciliation math, holdings
 sheet parsing and return calculation, the `backend/` database (migrations,
 PBKDF2 passwords + session tokens, entry create/update/skip, UNKNOWN editing,
-investment upsert), and the `impex` CLI (import/upsert semantics,
+investment upsert), the `impex` CLI (import/upsert semantics,
 reconcile-FAIL → `failed-<N>.csv` dedup, investment typing, export scope and
-format, backup/restore round-trip, auth gate, OpenRouter rule extraction).
+format, backup/restore round-trip, auth gate, OpenRouter rule extraction), and
+the dashboard via streamlit's `AppTest` (`tests/test_app.py` — all five pages,
+family/me scope, login gate).
 
 ## Backend (database)
 
@@ -155,6 +155,9 @@ users, expense/income/investment entries, investment holdings, hashed
 passwords (PBKDF2), and opaque session tokens. Dates are ISO in the database;
 fy defaults to April and the session TTL to 10 minutes — both tunable in
 `settings`. `impex.py` is the bulk writer; the dashboard reads and edits it.
+Dashboard sessions ride a same-Site `stmtok` cookie bridged through `st.html`
+with `unsafe_allow_javascript=True` (Streamlit has no cookie API), validated
+server-side; `Sign out` revokes the token.
 
 ## Files tracked in git
 
@@ -168,7 +171,7 @@ fy defaults to April and the session TTL to 10 minutes — both tunable in
 | `llm.py` | OpenRouter auto-mode client (stdlib-only) |
 | `scripts/seed_auto_rules.py` | regenerates `auto-rules.csv` from `rules.txt` (equivalence-checked) |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
-| `app.py` | streamlit dashboard (view-only) |
+| `app.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
 | `holdings.py` | investment sheet parser + XIRR |
 | `backend/` | sqlite system of record (schema, model, auth) |
 | `tests/` | unit tests |
