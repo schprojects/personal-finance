@@ -55,7 +55,7 @@ INVEST_EXPORT_COLS = ["MEMBER", "TYPE", "LABEL", "FOLIO", "UNITS",
 # helpers
 # --------------------------------------------------------------------------
 def _iso(date_s):
-    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%b-%Y"):
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%b-%Y", "%d/%m/%Y"):
         try:
             return dt.datetime.strptime((date_s or "").strip(), fmt).date().isoformat()
         except ValueError:

@@ -11,6 +11,9 @@ sqlite database (see **Backend**) that the importer feeds and members edit
 python3 -m venv .venv
 .venv/bin/pip install streamlit plotly pyyaml
 
+# create members.yaml first (see **Members**) with a row per member, or the
+# auth/import steps below exit with a missing-file error on a fresh clone
+
 # bootstrap a member password (each member does this once)
 .venv/bin/python impex.py auth set-password --user <member>
 
@@ -23,9 +26,10 @@ python3 -m venv .venv
 .venv/bin/streamlit run personal-finance.py
 ```
 
-Every `impex.py` subcommand asks for that member's password (or `--password-file
+`impex.py` `import`/`export` ask for that member's password (or `--password-file
 PATH` / `--password-stdin`); a wrong password exits non-zero before anything is
-read or written. The database lives at `var/networth.db` (`FINANCE_DB` to
+read or written. (`auth` sets passwords; `backup`/`restore` are unauthenticated
+by design.) The database lives at `var/networth.db` (`FINANCE_DB` to
 override), and every import writes a run log under `var/logs/`.
 
 Open the URL streamlit prints (default `http://localhost:8501`).
@@ -111,9 +115,10 @@ First match wins. Rules can be direction-scoped with `@dir:dep` (credits) or
 debit = expense, category `UNKNOWN` (editable in the dashboard); investment
 buys come from the `@dir:wd` rules in your local rule files.
 CSV rows that already carry a `KIND`/`CATEGORY` (e.g. an `impex.py export`
-file re-imported after edits) are used **as-is** — no rules, no LLM, no
-default-kind fallback, and no deposit→credit rewrite. Income,
-specified or inferred, always lands on its default category.
+file re-imported after edits, or a hand-authored statement with those columns)
+are used **as-is** — no rules, no LLM, no default-kind fallback, and no
+deposit→credit rewrite; dates may be `dd-mm-yyyy` or `dd/mm/yyyy`.
+Income, specified or inferred, always lands on its default category.
 `auto` mode additionally classifies never-seen payees via OpenRouter
 (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL` default `openrouter/auto`) and
 appends the suggested keyword rules to `auto-rules.csv` (created on first
@@ -222,7 +227,7 @@ export FINANCE_DB=/path/to/networth.db
 | `tests/` | unit tests |
 | `specs/` | project contracts |
 | `diagrams.md` | beginner-friendly visual on-ramp (system context, code map, sequence flows) |
-| `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `var/`, `backup/`, `dist/`, `members.yaml`, `rules.txt`, `manual-rules.csv`, `auto-rules.csv`, `review_Upis.txt` |
+| `.gitignore` | excludes `.venv/`, `__pycache__/`, `data/`, `output/`, `repo/`, `var/`, `backup/`, `dist/`, `dist.zip`, `[DB-FOLDER]/`, `members.yaml`, `rules.txt`, `manual-rules.csv`, `auto-rules.csv`, `review_Upis.txt` |
 
 ## Out of scope (for now)
 

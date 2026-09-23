@@ -7,9 +7,9 @@ Usage:
 
 Ships: personal-finance.py, impex.py, review.py, finance/ (common, rules,
 holdings, llm, classify), backend/ (schema/model/auth/db/paths),
-requirements.txt, README.md, auto-rules.csv. Runtime dirs (data/, var/,
-backup/, output/, tests/, specs/, members.yaml) are
-intentionally excluded.
+requirements.txt, README.md. Runtime dirs (data/, var/,
+backup/, output/, tests/, specs/, members.yaml, and the
+rule files) are intentionally excluded.
 """
 import argparse
 import shutil
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
 SOURCES = ["personal-finance.py", "impex.py", "review.py", "finance", "backend",
-           "auto-rules.csv", "README.md", "requirements.txt"]
+           "README.md", "requirements.txt"]
 
 
 def main() -> int:

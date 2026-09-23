@@ -130,6 +130,24 @@ class TestImportBankStatements(unittest.TestCase):
         self.assertEqual((by_part["SALARY-ACH"]["kind"],
                           by_part["SALARY-ACH"]["category"]), ("income", ""))
 
+    def test_carrier_csv_dd_mm_yyyy_dates(self):
+        # hand-authored carrier file with dd/mm/yyyy dates (like mamta_FY17-18)
+        make_carrier_file(os.path.join(self.a_dir, "m.csv"), [
+            ["a", "?", "19/01/2017", "", "PKT/BUY STUFF", 0, 500, 28798.44,
+             "expense", "Misc & small", "2016-17"],
+            ["a", "?", "01/02/2017", "", "ACH/WIPRO", 10, 0, 28808.44,
+             "income", "", "2016-17"],
+        ])
+        c = impex.import_bank_statements(self.backend, "a", self.rules)
+        self.assertEqual(c["created"], 2)
+        rows = self.backend.entries(user_ids=["a"])
+        by_part = {r["particulars"]: r for r in rows}
+        self.assertEqual(by_part["PKT/BUY STUFF"]["date"], "2017-01-19")
+        self.assertEqual(by_part["PKT/BUY STUFF"]["fy"], "2016-17")
+        self.assertEqual(by_part["PKT/BUY STUFF"]["category"], "Misc & small")
+        self.assertEqual((by_part["ACH/WIPRO"]["kind"],
+                          by_part["ACH/WIPRO"]["category"]), ("income", ""))
+
     def test_bad_match_guard_and_credit(self):
         # @amt qualifier + deposits-become-credit
         make_statement(os.path.join(self.a_dir, "s.csv"), [
