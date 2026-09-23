@@ -22,6 +22,9 @@ To build an application which presents investments and bank-transactions in a ni
 - transactions screen: should show a table of entries (based on the filters) which can be edited for category and kind and nothing else. categories should be drop down
 - review screen : should show a table of entries marked as unknon and category and kind can be updated via drop-down
 - holdings view: should be able to update purchase date, nav etc not the primary key of the entry
+- transactions view should provide a way to list a filtered set of transactions and apply a single category/kind to all of them
+- reviews view should provide as way to list a filtered set of transactions and apply a single category/kind to all of them
+- on review and transactions views one should be able to choose rows arbitraily for update contrary to current where all rows have to be applied a bulk edit. Instead we want to apply it on selected rows among those shown and also preserve the apply to all shown option. A check-box for selection of rows has to be shown.
 
 # Out of scope
 - create historic records for MFs at monthly cadence

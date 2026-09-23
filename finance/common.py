@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Shared helpers for classify.py and personal-finance.py (single source of truth).
+"""Shared helpers for the classifier and dashboard (single source of truth).
 
-Lives in the project root; both CLI tools import it. Never writes data.
+Lives in the finance/ package; CLI tools and the dashboard import it from
+there. Never writes data.
 """
 import datetime as dt
 import glob
@@ -10,7 +11,7 @@ import re
 
 import yaml
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 KINDS = ["expense", "refund", "review", "income", "investment", "transfer",
          "reimbursed", "charge", "cash", "credit"]

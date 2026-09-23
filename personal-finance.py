@@ -18,8 +18,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backend import FinanceBackend, UNKNOWN
-from common import BASELINE_EXCLUDED, inr, payee_key
-from holdings import absolute_return_pct, xirr
+from finance.common import BASELINE_EXCLUDED, inr, payee_key
+from finance.holdings import absolute_return_pct, xirr
 
 PAGES = ("Overview", "Transactions", "Categories", "Review", "Holdings")
 KINDS = ("expense", "income", "investment", "transfer",
@@ -168,6 +168,24 @@ def commit_entry_edits(backend, me_id, rowmap, edited):
     return applied, errors
 
 
+def bulk_apply_edits(backend, me_id, rowmap, kind, category):
+    """Apply one kind and/or category to every row in rowmap
+    [(entry_id, owner)]. Backend enforces ownership per row; the caller
+    guarantees at least one of kind/category is set. Returns (applied,
+    errors)."""
+    applied, errors = 0, []
+    for entry_id, owner in rowmap:
+        if owner != me_id:
+            errors.append(f"entry {entry_id}: only the owner of a row can edit it")
+            continue
+        try:
+            backend.update_entry(entry_id, me_id, kind=kind, category=category)
+            applied += 1
+        except ValueError as e:
+            errors.append(f"entry {entry_id}: {e}")
+    return applied, errors
+
+
 HOLDING_FIELD = {"Units": "units", "Purchase date": "purchase_date",
                  "Purchase NAV": "purchase_nav", "Latest date": "latest_date",
                  "Latest NAV": "latest_nav", "Value at cost": "value_at_cost",
@@ -217,21 +235,39 @@ def _write_backend(backend):
         w.close()
 
 
-def on_entry_edited(backend, key, rowmap):
-    """data_editor on_change for Transactions/Review: commit cell edits."""
+def on_entry_edited(backend, key, rowmap, sel_key=None):
+    """data_editor on_change for Transactions/Review: commit Kind/Category
+    cell edits and track the Select checkbox column (session state only)."""
     if st.session_state.get("scope") != "Me":
         return
     me = session_user()
     if not me:
         return
     edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
+    cells = {}
+    if sel_key:
+        sel = st.session_state.setdefault(sel_key, set())
+        for pos, ch in edited.items():
+            if "Select" in ch:
+                try:
+                    rid, _ = rowmap[int(str(pos))]
+                except (KeyError, IndexError, TypeError, ValueError):
+                    continue
+                if ch["Select"]:
+                    sel.add(rid)
+                else:
+                    sel.discard(rid)
+            else:
+                cells[pos] = ch
+    else:
+        cells = edited
     with _write_backend(backend) as w:
-        applied, errors = commit_entry_edits(w, me["id"], rowmap, edited)
+        applied, errors = commit_entry_edits(w, me["id"], rowmap, cells)
     if errors:
         st.warning("Some rows were not changed: " + "; ".join(errors))
     if applied:
         st.success(f"Updated {applied} row{'s' if applied != 1 else ''}.")
-    if applied or errors:
+    if applied or errors or (sel_key and edited):
         st.rerun()
 
 
@@ -261,41 +297,97 @@ def _cat_opts(backend, rr):
 
 
 def _entry_disabled(cols, editable):
-    """Columns locked in the entries editors: everything but Kind/Category
-    when editable; the whole grid when read-only (family view)."""
-    return [c for c in cols if c not in ("Kind", "Category")] if editable else True
+    """Columns locked in the entries editors: everything but Kind/Category (and
+    the Select checkbox) when editable; the whole grid when read-only."""
+    free = ("Kind", "Category", "Select")
+    return [c for c in cols if c not in free] if editable else True
 
 
-def entry_editor(backend, key, rr, editable):
+def entry_editor(backend, key, rr, editable, sel_key=None):
     """Shared Kind + Category dropdown editor over a row list. Me scope edits
-    (on_change -> on_entry_edited); Family stays display-only."""
+    (on_change -> on_entry_edited) plus a Select checkbox column tracked in
+    session state; Family stays display-only with no Select column."""
     if not rr:
         return
     if not editable:
         st.caption("Family view is read-only — switch to Me to edit a row.")
     rowmap = [(r["id"], r["member"]) for r in rr]
-    tbl = [{"Date": r["date_s"], "Member": r["member"], "Mode": r["mode"] or "—",
-            "Kind": r["kind"], "Category": r["category"],
-            "Particulars": r["part"][:120],
-            "Debit": r["wd"] or None, "Credit": r["dep"] or None}
-           for r in rr]
+    tbl = []
+    for r in rr:
+        row = {"Date": r["date_s"], "Member": r["member"],
+               "Mode": r["mode"] or "—",
+               "Kind": r["kind"], "Category": r["category"],
+               "Particulars": r["part"][:120],
+               "Debit": r["wd"] or None, "Credit": r["dep"] or None}
+        if editable:
+            row["Select"] = r["id"] in st.session_state.get(sel_key, set())
+            row = {"Select": row["Select"], **row}
+        tbl.append(row)
+    cc = {
+        "Kind": st.column_config.SelectboxColumn(
+            "Kind", options=sorted(set(KINDS) | {r["kind"] for r in rr}),
+            required=True),
+        "Category": st.column_config.SelectboxColumn(
+            "Category", options=_cat_opts(backend, rr), required=True),
+        "Debit": st.column_config.NumberColumn(format="₹ %d"),
+        "Credit": st.column_config.NumberColumn(format="₹ %d"),
+    }
+    if editable:
+        cc = {"Select": st.column_config.CheckboxColumn(
+            "Select", default=False, help="Tick rows to bulk-update."), **cc}
     st.data_editor(
         tbl,
         key=key,
         on_change=on_entry_edited,
-        args=(backend, key, rowmap),
+        args=(backend, key, rowmap, sel_key) if editable else (backend, key, rowmap),
         disabled=_entry_disabled(list(tbl[0]), editable),
-        column_config={
-            "Kind": st.column_config.SelectboxColumn(
-                "Kind", options=sorted(set(KINDS) | {r["kind"] for r in rr}),
-                required=True),
-            "Category": st.column_config.SelectboxColumn(
-                "Category", options=_cat_opts(backend, rr), required=True),
-            "Debit": st.column_config.NumberColumn(format="₹ %d"),
-            "Credit": st.column_config.NumberColumn(format="₹ %d"),
-        },
+        column_config=cc,
         width="stretch", height=560, hide_index=True,
     )
+
+
+def bulk_apply_bar(backend, me_id, key, rr, sel_key):
+    """Bulk categorize rows (Me scope only): pick one kind and/or category,
+    choose a scope — the selected rows or all shown — tick the confirmation,
+    then Apply. The button stays disabled until confirmed so a stray click
+    cannot rewrite N rows."""
+    if not rr:
+        return
+    sel = st.session_state.get(sel_key) or ()
+    selected = [r for r in rr if r["id"] in sel]
+    none = "—"
+    scope = st.radio("Apply to", ["Selected rows", f"All {len(rr)} shown rows"],
+                     horizontal=True, key=f"{key}_scope")
+    c1, c2 = st.columns(2)
+    kind = c1.selectbox("Set kind", [none, *sorted(set(KINDS) | {r["kind"] for r in rr})],
+                        key=f"{key}_kind")
+    cat = c2.selectbox("Set category", [none, *_cat_opts(backend, rr)],
+                       key=f"{key}_cat")
+    if scope.startswith("Selected") and not selected:
+        st.caption(f"Tick the {'Select'!r} checkboxes in the table above — "
+                   f"{len(sel) - len(selected)} selection(s) are not in the "
+                   f"current view.")
+        target = []
+    else:
+        target = selected if scope.startswith("Selected") else rr
+    ok = st.checkbox(f"Yes, apply to {len(target)} row{'s' if len(target) != 1 else ''}",
+                     key=f"{key}_confirm")
+    ready = ok and target and (kind != none or cat != none)
+    if st.button(f"Apply to {len(target)} row{'s' if len(target) != 1 else ''}",
+                 key=key, disabled=not ready):
+        applied, errors = bulk_apply_edits(
+            backend, me_id, [(r["id"], r["member"]) for r in target],
+            kind=None if kind == none else kind,
+            category=None if cat == none else cat)
+        if errors:
+            st.warning(f"{len(errors)} row(s) not changed: "
+                       + "; ".join(errors[:5]))
+        if applied:
+            st.success(f"Updated {applied} row{'s' if applied != 1 else ''}.")
+        if applied:
+            st.session_state.setdefault(sel_key, set()).clear()
+        if applied or errors:
+            st.rerun()
 
 
 # --------------------------------------------------------------------------
@@ -432,7 +524,9 @@ def page_transactions(backend, rows, f, me, editable):
         rr = [r for r in rr if r["category"] == UNKNOWN]
     rr.sort(key=lambda r: (r["date"], r["ym"]), reverse=True)
     st.caption(f"{len(rr)} rows")
-    entry_editor(backend, "ed_entries", rr, editable)
+    if editable:
+        bulk_apply_bar(backend, me["id"], "bulk_tx", rr, "bulk_tx_sel")
+    entry_editor(backend, "ed_entries", rr, editable, "bulk_tx_sel" if editable else None)
 
 
 def page_categories(backend, rows, f, me, editable):
@@ -512,7 +606,9 @@ def page_review(backend, rows, f, me, editable):
     fig.update_layout(yaxis_tickformat="~s", margin=dict(t=10, b=40),
                       xaxis_tickangle=-30, height=360)
     st.plotly_chart(fig, width="stretch")
-    entry_editor(backend, "ed_review", rev, editable)
+    if editable:
+        bulk_apply_bar(backend, me["id"], "bulk_rev", rev, "bulk_rev_sel")
+    entry_editor(backend, "ed_review", rev, editable, "bulk_rev_sel" if editable else None)
 
 
 def _ret_pct(cost, latest):

@@ -9,8 +9,8 @@ from unittest import mock
 
 import impex
 from backend import FinanceBackend
-from llm import parse_response
-from rules import RuleSet
+from finance.llm import parse_response
+from finance.rules import RuleSet
 
 MEMBERS = [{"name": "a", "data_dir": "data/a"}, {"name": "b", "data_dir": "data/b"}]
 

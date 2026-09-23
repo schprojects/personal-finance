@@ -18,6 +18,7 @@ investments, and export any stored entries as CSV.
 - importer shall create entries for the bank-transactions from the bank-statement after classification
 - importer shall create entries for investments from the investments after classification applying the auto and  manual rules
 - The importer should create entries for items where it has identified the categories with those categories
+- The importer should use the kind and category as is when specified, all the inference on kind and category are only applicable when those are not specified. The income kind has ONLY the default category use it
 - The importer where it has not identified the categories should mark the transaction as UNKNOWN
 - For default rules (no manual/auto rule matches): All money credited into the account is INCOME/INCOMING, all other debits are money spent (EXPENSE, category UNKNOWN). Investment buys are classified by the directional `@dir:wd` rules in the local rule files. The money spent, income and investments can be further sub-categorized
 - rule precedence: manual-rules.csv is consulted first, then auto-rules.csv; first match wins; no match -> default (see above)

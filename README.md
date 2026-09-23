@@ -38,6 +38,10 @@ Open the URL streamlit prints (default `http://localhost:8501`).
 
 ## How it works
 
+> New to Python or web frameworks? Start with **[diagrams.md](diagrams.md)** —
+> a visual on-ramp to the codebase (system context, web primer, code map,
+> sequence flows).
+
 ### Members
 
 `members.yaml` maps each member name to their data directory:
@@ -119,8 +123,9 @@ blocks must reconcile first (`opening + Σdep − Σwd == closing`); a FAILING
 block no longer stops the run — its rows go to `output/<FY>/failed-<N>.csv`
 (complete rows, deduped across runs) and the failure is logged.
 
-`classify.py`, `repo/`, `review-*.csv`, `rules.txt`, and `manual.csv` are
-retired. `data/` stays the import source; `auto-rules.csv`, `manual-rules.csv`
+`finance/classify.py`'s write path, `repo/`, `review-*.csv`, `rules.txt`, and
+`manual.csv` are retired. `data/` stays the import source; `auto-rules.csv`,
+`manual-rules.csv`
 and `rules.txt` are all gitignored — the rule files are personal-local, like
 `members.yaml` and the database.
 
@@ -136,9 +141,9 @@ sections:
 | Section | What it shows |
 |---|---|
 | **Overview** | net spend, savings rate, income vs spend per FY, top category, unreviewed count; focus-year monthly trend vs prior FY + cumulative spend line; top-8 category donut. Incoming / net spend / savings rate aggregate over the current scope and selected FYs (income and credit always fund the Incoming card, even though the Kinds filter defaults to spend kinds — bug-fix-001) |
-| **Transactions** | full classified table: search, kind/category filter, UNKNOWN-row toggle, ₹-formatted |
+| **Transactions** | full classified table: search, kind/category filter, UNKNOWN-row toggle, ₹-formatted; Me view edits Kind/Category per row via dropdowns, or bulk-applies one kind/category to the rows ticked in the Select column (or all shown) after a confirm checkbox |
 | **Categories** | per-category monthly trend across FYs + top payees within it |
-| **Review** | UNKNOWN rows grouped by payee (count + ₹), per-payee drill, and — in the Me view only — a classify form that sets kind + category on the member's own row |
+| **Review** | UNKNOWN rows grouped by payee (count + ₹), per-payee drill; Me view edits Kind/Category per row via dropdowns, or bulk-applies one kind/category to the rows ticked in the Select column (or all shown) after a confirm checkbox |
 | **Holdings** | household net worth from the investments table; MF schemes (units, cost, latest NAV, absolute return % **+ XIRR**); cash/asset rows; per-member donut + largest-schemes bar; a Me-view-only edit form to refresh the latest value + as-of date of an owned holding |
 
 Edits commit `manual_override`, so a later re-import never touches them.
@@ -147,11 +152,12 @@ To see **XIRR (annualized)** for a scheme, its MF sheet must author a
    `data/<member>/investments/mfs-<member>.csv`): the app values cost at that date vs
 market at the latest NAV. No column, no XIRR — the cell shows `—`.
 
-### Shared logic (`common.py`)
+### Shared logic (`finance/common.py`)
 
 `fy_of`, `inr`, `money`, `payee_key`, `load_members`, `statements_for`,
-`investments_for`, `BASELINE_EXCLUDED` -- imported by both `classify.py` and
-`personal-finance.py`.
+`investments_for`, `BASELINE_EXCLUDED` — shared by the importer and the
+dashboard, living in the `finance/` package next to the rest of the domain
+modules (`rules`, `holdings`, `llm`, `classify`).
 
 ### Tests (`tests/`)
 
@@ -197,20 +203,21 @@ export FINANCE_DB=/path/to/networth.db
 
 | File | Purpose |
 |---|---|
-| `common.py` | shared helpers |
-| `rules.py` | rule language (Rule / RuleSet) for `rules.txt`, `auto-rules.csv`, `manual-rules.csv` |
-| `classify.py` | statement parser + legacy classifier (parsing reused by impex) |
-| `impex.py` | gated importer/exporter CLI (bank → entries, sheets → investments, export/backup/restore) |
-| `llm.py` | OpenRouter auto-mode client (stdlib-only) |
+| `finance/common.py` | shared helpers |
+| `finance/rules.py` | rule language (Rule / RuleSet) for `rules.txt`, `auto-rules.csv`, `manual-rules.csv` |
+| `finance/classify.py` | statement parser + reconciliation (parsing reused by impex) |
+| `finance/holdings.py` | investment sheet parser + XIRR |
+| `finance/llm.py` | OpenRouter auto-mode client (stdlib-only) |
 | `requirements.txt` | pip deps for the dist bundle (streamlit, plotly, pyyaml) |
 | `scripts/seed_auto_rules.py` | regenerates local `auto-rules.csv` from `rules.txt` (equivalence-checked) |
 | `scripts/make_dist.py` | assembles `dist/` + `dist.zip` |
 | `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `personal-finance.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
-| `holdings.py` | investment sheet parser + XIRR |
+| `impex.py` | gated importer/exporter CLI (bank → entries, sheets → investments, export/backup/restore) |
 | `backend/` | sqlite system of record (schema, model, auth) |
 | `tests/` | unit tests |
 | `specs/` | project contracts |
+| `diagrams.md` | beginner-friendly visual on-ramp (system context, code map, sequence flows) |
 | `.gitignore` | excludes `.venv/`, `data/`, `output/`, `repo/`, `var/`, `backup/`, `dist/`, `members.yaml`, `rules.txt`, `manual-rules.csv`, `auto-rules.csv`, `review_Upis.txt` |
 
 ## Out of scope (for now)

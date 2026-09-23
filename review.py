@@ -9,8 +9,8 @@ the review file towards zero.
 """
 import sys
 
-from common import inr
-from rules import RuleSuggester
+from finance.common import inr
+from finance.rules import RuleSuggester
 
 
 def main():

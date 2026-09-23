@@ -205,6 +205,36 @@ class TestEditHelpers(unittest.TestCase):
         finally:
             b.close()
 
+    def test_bulk_apply_edits_commit_and_ownership(self):
+        pf = pf_module()
+        b = FinanceBackend(path=self.db)
+        try:
+            rows = b.entries(user_ids=["a", "b"])
+            rowmap = [(r["id"], r["user_id"]) for r in rows]
+            mine = sum(1 for _, o in rowmap if o == "a")
+            self.assertEqual((mine, len(rowmap)), (2, 3))
+            applied, errors = pf.bulk_apply_edits(
+                b, "a", rowmap, kind="expense", category="Bulk")
+            self.assertEqual(applied, 2)
+            self.assertEqual(len(errors), 1)  # b's row refused, not raised
+            for r in b.entries(user_ids=["a"]):
+                self.assertEqual((r["kind"], r["category"]),
+                                 ("expense", "Bulk"))
+            # b's row untouched
+            rb = b.entries(user_ids=["b"])[0]
+            self.assertEqual(rb["kind"], "income")
+            # a subset rowmap (selection) changes only that subset
+            before = b.entries(user_ids=["a"])
+            applied, errors = pf.bulk_apply_edits(
+                b, "a", [(r["id"], "a") for r in before[:1]],
+                kind=None, category="Picked")
+            self.assertEqual((applied, errors), (1, []))
+            rows = b.entries(user_ids=["a"])
+            self.assertEqual(rows[0]["category"], "Picked")
+            self.assertEqual(rows[1]["category"], "Bulk")
+        finally:
+            b.close()
+
     def test_investment_edits_commit_and_reject_identity(self):
         pf = pf_module()
         b = FinanceBackend(path=self.db)
@@ -303,6 +333,33 @@ class TestEditCallbacks(unittest.TestCase):
         st.success.assert_not_called()
         st.warning.assert_called_once()
         st.rerun.assert_called_once()
+
+    def test_selection_checkboxes_are_tracked_not_committed(self):
+        """Select column toggles update the session-state set and never touch
+        the DB (the Select delta must not be passed to commit_entry_edits)."""
+        self.session["ed_entries"] = {
+            "edited_rows": {0: {"Select": True}, 1: {"Select": True}}}
+        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap,
+                        "bulk_tx_sel")
+        self.assertEqual(self.session["bulk_tx_sel"], {r[0] for r in self.rowmap})
+        st.success.assert_not_called()
+        st.warning.assert_not_called()
+        st.rerun.assert_called_once()  # re-render shows the ticks
+        # a real cell edit on the same table still commits
+        self.session["ed_entries"] = {
+            "edited_rows": {0: {"Select": True}, 1: {"Category": "Groceries"}}}
+        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap,
+                        "bulk_tx_sel")
+        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"],
+                         "Groceries")
+        st.success.assert_called_once()
+        # toggling off removes the row from the selection
+        self.session["ed_entries"] = {
+            "edited_rows": {0: {"Select": False}}}
+        self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap,
+                   "bulk_tx_sel")
+        self.assertEqual(self.session["bulk_tx_sel"],
+                         {self.rowmap[1][0]})
 
     def test_entry_callback_runs_off_the_script_thread(self):
         """Regression for the real failure: streamlit calls on_change on another

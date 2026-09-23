@@ -33,6 +33,46 @@ class TestSchema(unittest.TestCase):
                 len(MIGRATIONS))
             b.close()
 
+    def test_v2_backfills_manual_override_for_pre_fix_edits(self):
+        """Rows edited before the manual-override flag had edited_at set but manual_override
+        left at 0. v2 migration freezes them so re-imports cannot clobber.
+        Untouched rows (edited_at IS NULL) keep manual_override = 0."""
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "networth.db")
+            con = sqlite3.connect(path)
+            con.executescript(MIGRATIONS[0])
+            con.execute("PRAGMA user_version = 1")
+            con.execute(
+                "INSERT INTO families (id, name) VALUES ('f1', 'f')")
+            con.execute(
+                "INSERT INTO users (id, username, family_id, data_dir,"
+                " created_at) VALUES ('a', 'a', 'f1', 'data/a',"
+                " '2026-01-01T00:00:00')")
+            con.execute(
+                "INSERT INTO categories (id, label, kind)"
+                " VALUES ('c', 'c', 'expense')")
+            con.execute(
+                "INSERT INTO entries (user_id, category_id, kind, fy, date,"
+                " particulars, nkey, edited_at, manual_override)"
+                " VALUES ('a','c','expense','2026-27','2026-04-01','p',"
+                " 'k-edited', '2026-09-01T00:00:00', 0)")
+            con.execute(
+                "INSERT INTO entries (user_id, category_id, kind, fy, date,"
+                " particulars, nkey, edited_at, manual_override)"
+                " VALUES ('a','c','expense','2026-27','2026-04-02','q',"
+                " 'k-untouched', NULL, 0)")
+            con.commit()
+            con.close()
+            b = make_backend(d)  # opens -> migrate() runs v2
+            self.assertEqual(
+                b.con.execute("PRAGMA user_version").fetchone()[0],
+                len(MIGRATIONS))
+            rows = {r["date"]: r for r in b.entries(user_ids=["a"])}
+            self.assertEqual(rows["2026-04-01"]["manual_override"], 1)
+            self.assertEqual(rows["2026-04-02"]["manual_override"], 0)
+            b.close()
+
     def test_db_path_defaults_to_var(self):
         self.assertTrue(db_path().endswith("var/networth.db"))
 
@@ -172,6 +212,10 @@ class TestEntries(unittest.TestCase):
         row = self.b.entries(user_ids=["a"])[0]
         self.assertEqual((row["kind"], row["category"]),
                          ("expense", "UNKNOWN"))
+        # dashboard edits freeze the row against later re-imports
+        self.assertEqual(row["manual_override"], 1)
+        self.assertEqual(self.b.upsert_bank_entry(
+            "a", kind="expense", category="Groceries", **kw), "manual_override")
 
     def test_entry_filters(self):
         rows = [

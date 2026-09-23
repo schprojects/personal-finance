@@ -94,4 +94,11 @@ MIGRATIONS = [
         ('fy_start_month', '4'),
         ('session_ttl_seconds', '600');
     """,
+    # v2 — freeze rows edited before the manual-override flag: dashboard edits stamped
+    # edited_at without setting manual_override, leaving them re-importable.
+    # Idempotent: a second run touches nothing.
+    """
+    UPDATE entries SET manual_override = 1
+     WHERE edited_at IS NOT NULL AND manual_override = 0;
+    """,
 ]

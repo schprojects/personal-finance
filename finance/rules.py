@@ -25,7 +25,7 @@ import glob
 import os
 import re
 
-from common import payee_key
+from .common import payee_key
 
 
 class Rule:

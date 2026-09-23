@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from holdings import (absolute_return_pct, household_value, is_mf_sheet,
+from finance.holdings import (absolute_return_pct, household_value, is_mf_sheet,
                       parse_investments, parse_label_rows, parse_mf_sheet, xirr)
 
 MF_HEADER = ["Folio No.", "ISIN", "Scheme Name", "Cost Value (INR)",

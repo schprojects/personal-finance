@@ -2,7 +2,7 @@
 import os
 import unittest
 
-from common import fy_of, fy_of_str, inr, money, payee_key, load_members
+from finance.common import fy_of, fy_of_str, inr, money, payee_key, load_members
 
 
 class TestFy(unittest.TestCase):

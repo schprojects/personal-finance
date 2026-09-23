@@ -5,7 +5,7 @@ To seamlessly deploy the application
 - The application shall be available in the dist folder
 - The dist folder shall be provided as a zip archive
 - The dist folder shall be constructed with specific data [ user can choose to include a specific sqlitedb as initial data]
-- dist/ shall contain the application sources (personal-finance.py, impex.py, backend/, rules.py, common.py, holdings.py), requirements.txt and the README.md runbook
+- dist/ shall contain the application sources (personal-finance.py, impex.py, review.py, backend/, finance/), requirements.txt and the README.md runbook
 - a seed sqlitedb may be included via --with-db <path> (then the dist app starts on that database)
 - make_dist.py shall assemble dist/ and archive it as dist.zip in the project root
 - The system shall provide way to back up data

@@ -19,11 +19,12 @@ import os
 import re
 import sys
 
-from common import fy_of_str, inr, load_members, money, payee_key, statements_for
-from rules import RuleSet
+from .common import fy_of_str, inr, load_members, money, payee_key, statements_for
+from .rules import RuleSet
 
 
-RULES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.txt")
+RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "rules.txt")
 
 
 def load_ruleset():
@@ -101,7 +102,8 @@ def reconcile(acct, txs):
 
 
 MANUAL = {}
-_MANUAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual.csv")
+_MANUAL_PATH = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "manual.csv")
 if os.path.exists(_MANUAL_PATH):
     with open(_MANUAL_PATH, newline="") as f:
         for r in csv.DictReader(f):

@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from rules import Rule, RuleSet, RuleSuggester, parse_line
+from finance.rules import Rule, RuleSet, RuleSuggester, parse_line
 
 
 CSV_RULES = (

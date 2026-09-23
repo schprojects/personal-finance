@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-import classify
+import finance.classify as classify
 
 
 FIXTURE_RULES = """\

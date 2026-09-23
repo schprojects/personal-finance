@@ -260,7 +260,10 @@ class FinanceBackend:
                                                       kind or row["kind"])
         else:
             category_id = row["category_id"]
-        sets, params = ["edited_at = ?"], [auth.now_utc().isoformat()]
+        # Dashboard edits are authoritative: manual_override=1 freezes the row
+        # against future re-imports (upsert_bank_entry returns manual_override).
+        sets, params = ["edited_at = ?", "manual_override = 1"], \
+            [auth.now_utc().isoformat()]
         if kind is not None:
             sets.append("kind = ?"); params.append(kind)
         if category:

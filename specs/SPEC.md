@@ -27,6 +27,7 @@ Personal & family net-worth / expense tracker ("Personal Finance"). `README.md` 
     - importing the data in csv into datastore
     - exporting the data in csv format
     - importer should classify raw bank-statements to expense, income with many subcategories and create entries in datbase
+    - importer should use the kind and category already available in the csv file i.e should not try to apply any assignment of kind and category for such entries
     - importer should import likewise investments
     - exporter should be able to export data in csv format
     - importer-exporter is a single CLI tool

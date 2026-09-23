@@ -34,11 +34,11 @@ sys.path.insert(0, BASE)
 from backend import FinanceBackend, UNKNOWN
 from backend.model import nkey
 from backend.paths import db_path
-from common import load_members, money, statements_for
-from classify import parse_blocks, reconcile
-from holdings import is_mf_sheet, parse_label_rows, parse_mf_sheet
-from llm import classify_unmatched
-from rules import RuleSet, _suggest_keyword
+from finance.classify import parse_blocks, reconcile
+from finance.common import load_members, money, statements_for
+from finance.holdings import is_mf_sheet, parse_label_rows, parse_mf_sheet
+from finance.llm import classify_unmatched
+from finance.rules import RuleSet, _suggest_keyword
 
 AUTO_RULES = os.path.join(BASE, "auto-rules.csv")
 DEFAULT_MANUAL = os.path.join(BASE, "manual-rules.csv")
