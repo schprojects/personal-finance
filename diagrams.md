@@ -237,9 +237,12 @@ deletes it from both sides.
 ## 5. Flow — importing a bank statement
 
 The CLI (`impex.py import …`) is the only path that writes entries. It
-parses a CSV, **reconciles** every block (sanity-check: opening balance +
+parses a CSV, **reconciles** every ICICI block (sanity-check: opening balance +
 Σdeposits − Σwithdrawals = closing balance), then classifies each row with
 the rule language and writes one row per transaction into the database.
+Columnar CSVs that already carry `KIND`/`CATEGORY` (an `impex.py export`
+round-trip) skip the reconcile gate and use those values verbatim, with
+income forced to the default category.
 
 ```mermaid
 sequenceDiagram

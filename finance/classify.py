@@ -35,10 +35,64 @@ def load_ruleset():
     return RuleSet.from_file(RULES_PATH)
 
 
+def _canon(col):
+    """Exporter/ICICI column name -> canonical key (DEPOSIT vs DEPOSITS)."""
+    u = (col or "").strip().upper()
+    if u == "DEPOSITS":
+        u = "DEPOSIT"
+    if u == "WITHDRAWALS":
+        u = "WITHDRAWAL"
+    return u
+
+
+def _is_carrier_header(first):
+    if not first:
+        return False
+    keys = {_canon(c) for c in first}
+    return "DATE" in keys and "PARTICULARS" in keys
+
+
+def _parse_carrier(rows):
+    """Rows that already carry KIND/CATEGORY (exporter round-trip CSVs)."""
+    idx = {}
+    for i, c in enumerate(rows[0]):
+        k = _canon(c)
+        if k not in idx:
+            idx[k] = i
+    get = lambda k: rows[i][idx[k]] if k in idx and idx[k] < len(rows[i]) else ""  # noqa: E731
+    acct, txs = "", []
+    for i, r in enumerate(rows[1:], start=1):
+        if not any(c.strip() for c in r):
+            continue
+        date = get("DATE").strip()
+        if not date:
+            continue
+        tx = {"date": date, "mode": get("MODE").strip(),
+              "part": get("PARTICULARS").strip(), "dep": money(get("DEPOSIT")),
+              "wd": money(get("WITHDRAWAL")), "bal": money(get("BALANCE")),
+              "_carrier": True}
+        if (get("KIND") or "").strip():
+            tx["kind"] = get("KIND").strip().lower()
+        if (get("CATEGORY") or "").strip():
+            tx["category"] = get("CATEGORY").strip()
+        acct = acct or get("ACCOUNT").strip()
+        txs.append(tx)
+    return (acct or "?", txs)
+
+
 def parse_blocks(path):
-    """Yield (account, [tx dicts]) blocks from one statement CSV."""
+    """Yield (account, [tx dicts]) blocks from one statement CSV.
+
+    Also accepts columnar files that already carry KIND/CATEGORY (e.g. the
+    exporter's own CSVs re-imported): those rows are tagged `_carrier` and the
+    importer uses the given values verbatim instead of re-inferring.
+    """
     with open(path, newline="") as f:
         rows = [r + [""] * (6 - len(r)) for r in csv.reader(f)]
+
+    first = next((r for r in rows if any(c.strip() for c in r)), None)
+    if _is_carrier_header(first):
+        return [_parse_carrier(rows)]
 
     blocks = []
     i = 0

@@ -110,6 +110,10 @@ First match wins. Rules can be direction-scoped with `@dir:dep` (credits) or
 `@dir:wd` (debits). No match → default-kind fallback: credit = income,
 debit = expense, category `UNKNOWN` (editable in the dashboard); investment
 buys come from the `@dir:wd` rules in your local rule files.
+CSV rows that already carry a `KIND`/`CATEGORY` (e.g. an `impex.py export`
+file re-imported after edits) are used **as-is** — no rules, no LLM, no
+default-kind fallback, and no deposit→credit rewrite. Income,
+specified or inferred, always lands on its default category.
 `auto` mode additionally classifies never-seen payees via OpenRouter
 (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL` default `openrouter/auto`) and
 appends the suggested keyword rules to `auto-rules.csv` (created on first

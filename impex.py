@@ -215,7 +215,11 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
     failed, prep = {}, []
     for m, path in statements_for([member]):
         for acct, txs in parse_blocks(path):
-            opening, ok, msg, txs = reconcile(acct, txs)
+            carrier = bool(txs and txs[0].get("_carrier"))
+            if carrier:
+                opening, ok, msg = 0.0, True, "carrier csv (kind/category as-is)"
+            else:
+                opening, ok, msg, txs = reconcile(acct, txs)
             log.append(f"  {os.path.relpath(path)} [{acct}] {msg} "
                        f"{'PASS' if ok else 'FAIL'}")
             print(f"  {os.path.relpath(path)} [{acct}] {msg} "
@@ -230,11 +234,17 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
             for t in txs:
                 date_iso = _iso(t["date"])
                 dir_ = "dep" if t["dep"] > 0 else "wd"
-                rr = rules.match(t["part"], t["mode"], t["wd"] or t["dep"], dir_=dir_)
+                specified = bool(t.get("kind") or t.get("category"))
+                if specified:
+                    rr = (t.get("kind"), t.get("category"))
+                else:
+                    rr = rules.match(t["part"], t["mode"], t["wd"] or t["dep"],
+                                     dir_=dir_)
                 prep.append({"account": acct, "date": date_iso, "mode": t["mode"],
                              "part": t["part"], "dep": t["dep"], "wd": t["wd"],
                              "bal": t["bal"], "file": os.path.basename(path),
-                             "match": rr, "matched": rr is not None})
+                             "match": rr, "matched": rr is not None,
+                             "carrier": specified})
             backend.con.commit()
 
     if llm_enabled:
@@ -265,8 +275,13 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
                 kind, cat = "expense", UNKNOWN
         else:
             kind, cat = p["match"]
-            if p["dep"] > 0 and p["wd"] == 0 and kind in ("expense", "review"):
+            if kind is None:
+                kind = "income" if p["dep"] > 0 else "expense"
+            if p["dep"] > 0 and p["wd"] == 0 and not p["carrier"] \
+                    and kind in ("expense", "review"):
                 kind, cat = "credit", ""
+        if kind == "income":
+            cat = ""  # income has only the default category
         action = backend.upsert_bank_entry(
             owner, account=p["account"], date=p["date"], mode=p["mode"],
             particulars=p["part"], deposit=p["dep"], withdrawal=p["wd"],

@@ -28,6 +28,16 @@ def make_statement(path, rows, closing_multiplier=1.0):
             w.writerow(list(r))
 
 
+def make_carrier_file(path, rows):
+    """Exporter-style CSV where rows already carry KIND/CATEGORY."""
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["MEMBER", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
+                    "DEPOSIT", "WITHDRAWAL", "BALANCE", "KIND", "CATEGORY", "FY"])
+        for r in rows:
+            w.writerow(list(r))
+
+
 RULES_CSV = (
     "expense,Groceries,STARBAZAAR\n"
     "expense,Transport & fuel,MOONSOON @amt<=10000\n"
@@ -89,6 +99,36 @@ class TestImportBankStatements(unittest.TestCase):
         impex.import_bank_statements(self.backend, "a", self.rules)
         self.assertFalse(os.path.exists(
             os.path.join("output", "2024-25", "failed-2.csv")))
+
+    def test_carrier_csv_honors_specified_kind_category(self):
+        # exporter-round-trip file: specified values win (no rules/LLM/credit
+        # rewrite), income keeps only the default category, absent values infer.
+        make_carrier_file(os.path.join(self.a_dir, "carrier.csv"), [
+            ["a", "A", "01-04-2024", "", "FOO-PAYEE", 0, 100, 900,
+             "expense", "Groceries", "2024-25"],
+            ["a", "A", "02-04-2024", "", "BAR-REFUND", 250, 0, 1150,
+             "expense", "Refund", "2024-25"],
+            ["a", "A", "03-04-2024", "", "UPI/STARBAZAAR MART@okpay", 0, 100, 1050,
+             "", "", "2024-25"],
+            ["a", "A", "04-04-2024", "", "SALARY-ACH", 500, 0, 1550,
+             "income", "Salary", "2024-25"],
+        ])
+        c = impex.import_bank_statements(self.backend, "a", self.rules)
+        self.assertEqual(c["created"], 4)
+        rows = self.backend.entries(user_ids=["a"])
+        by_part = {r["particulars"]: r for r in rows}
+        # specified values used verbatim, even for a deposit (no credit rewrite)
+        self.assertEqual((by_part["FOO-PAYEE"]["kind"],
+                          by_part["FOO-PAYEE"]["category"]), ("expense", "Groceries"))
+        self.assertEqual((by_part["BAR-REFUND"]["kind"],
+                          by_part["BAR-REFUND"]["category"]), ("expense", "Refund"))
+        # not specified -> normal inference (rule match on STARBAZAAR)
+        self.assertEqual((by_part["UPI/STARBAZAAR MART@okpay"]["kind"],
+                          by_part["UPI/STARBAZAAR MART@okpay"]["category"]),
+                         ("expense", "Groceries"))
+        # income has ONLY the default category
+        self.assertEqual((by_part["SALARY-ACH"]["kind"],
+                          by_part["SALARY-ACH"]["category"]), ("income", ""))
 
     def test_bad_match_guard_and_credit(self):
         # @amt qualifier + deposits-become-credit
