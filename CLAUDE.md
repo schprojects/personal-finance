@@ -21,11 +21,11 @@ Always use the venv (`.venv/`); deps are `streamlit plotly pyyaml` (`requirement
 
 ## Architecture
 
-- **Database is the truth.** `backend/` (`FinanceBackend` facade in `model.py`, `schema.py` append-only migrations via `PRAGMA user_version`, `auth.py` PBKDF2 passwords + opaque session tokens, `db.py`, `paths.py`) is the only writer. `output/` holds only per-FY `failed-<N>.csv` reconcile failures; `repo/`, `review-*.csv`, `rules.txt`, `manual.csv` and the classify write path are retired.
+- **Database is the truth.** `backend/` (`FinanceBackend` facade in `model.py`, `schema.py` append-only migrations via `PRAGMA user_version`, `auth.py` PBKDF2 passwords + opaque session tokens, `db.py`, `paths.py`) is the only writer. `output/` holds only per-FY `failed-<N>.csv` reconcile failures.
 - **Two entry points, one data path.** `impex.py` is the auth-gated bulk importer/exporter (bank statements → `entries`, investment sheets → `investments`); `personal-finance.py` (single-file streamlit app: Overview / Transactions / Categories / Review / Holdings) reads the db and lets a member edit only their own rows in the "Me" scope (Family scope is read-only). Dashboard sessions use a `stmtok` cookie bridged via `st.html` + JS.
-- **`finance/` domain package**: `common` (FY, money, payee_key, members), `rules` (Rule/RuleSet for rule files; first match wins, `@dir:dep|wd` direction scoping), `classify` (statement parser + reconcile `opening + Σdep − Σwd == closing`), `holdings` (investment sheet parser + XIRR), `llm` (OpenRouter auto-mode, stdlib-only).
-- **Import semantics**: rows keyed by account+date+particulars+deposit+withdrawal; created / updated (classification changed) / skipped (identical); rows with `manual_override` are never touched on re-import. Dashboard edits set `manual_override`. CSV rows carrying their own KIND/CATEGORY are used as-is; income always lands on its default category.
-- Personal data is gitignored: `data/`, `var/`, `output/`, `members.yaml`, `rules.txt`, `manual-rules.csv`, `auto-rules.csv`, `dist/`, `dist.zip`.
+- **`finance/` domain package**: `common` (FY, money, payee_key, members), `classify` (statement parser + reconcile `opening + Σdep − Σwd == closing`), `holdings` (investment sheet parser + XIRR). There are no rule files or LLM.
+- **Import semantics**: rows keyed by account+date+particulars+deposit+withdrawal; created / updated (classification changed) / skipped (identical); rows with `manual_override` are never touched on re-import. Dashboard edits set `manual_override`. The importer assumes entries are classified: CSV KIND/CATEGORY are used as specified, otherwise credit→income, debit→expense/UNKNOWN; income always lands on its default category.
+- Personal data is gitignored: `data/`, `var/`, `output/`, `members.yaml`, `dist/`, `dist.zip`.
 
 ## Project rules (from `specs/AGENTS.md`)
 

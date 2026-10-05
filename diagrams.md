@@ -20,7 +20,7 @@ of modules with an `__init__.py` file. You use one from another file with
 `import` or `from … import …`:
 
 ```python
-from finance.rules import RuleSet            # use RuleSet from finance/rules.py
+from finance.holdings import parse_mf_sheet  # use a function from finance/holdings.py
 from backend import FinanceBackend, UNKNOWN  # use the backend's facade
 ```
 
@@ -36,10 +36,10 @@ by hand — your code reads and writes it through a *facade* (`FinanceBackend`)
 so the SQL stays in one place.
 
 **Configuration vs personal data.** The committed repository is generic — no
-real bank data, no passwords, no rule files. Per-member data lives in
+real bank data, no passwords. Per-member data lives in
 gitignored folders: `data/<member>/` (raw statements, your input),
 `var/networth.db` (the database, derived from that input), `members.yaml`
-(your members), and the rule files. Anyone with the same code can re-derive
+(your members). Anyone with the same code can re-derive
 their own database from their own statements.
 
 ---
@@ -131,9 +131,7 @@ plus a handful of root scripts that are the user-facing entry points.
 personal-finance/
 ├── finance/                  ← SHARED DOMAIN (imported by the dashboard and the CLI)
 │   ├── common.py             shared helpers (members, money, FY, payee_key, "inr" ₹ formatter)
-│   ├── rules.py              classification-rule language (Rule, RuleSet)
 │   ├── holdings.py           investment sheet parser + XIRR math
-│   ├── llm.py                OpenRouter client (used only by "auto" import mode)
 │   └── classify.py           statement parser + reconciliation; used by impex
 │
 ├── backend/                  ← PERSISTENCE (the system of record)
@@ -145,16 +143,13 @@ personal-finance/
 │
 ├── personal-finance.py       ← ENTRY POINT: streamlit dashboard (the web app)
 ├── impex.py                  ← ENTRY POINT: CLI for import / export / backup / restore
-├── review.py                 ← ENTRY POINT: helper CLI; prints rule suggestions
 │
 ├── scripts/                  ← build / maintenance utilities
-│   ├── make_dist.py          rebuilds dist/ + dist.zip
-│   └── seed_auto_rules.py    one-time seeding of auto-rules.csv from rules.txt
+│   └── make_dist.py          rebuilds dist/ + dist.zip
 │
 ├── tests/                    ← unittest suite (mirrors the layers)
 │   ├── test_backend.py       backend/ behaviour (schema, entries, investments, auth)
 │   ├── test_common.py        finance/common.py helpers
-│   ├── test_rules.py         finance/rules.py grammar
 │   ├── test_holdings.py      finance/holdings.py XIRR + parsers
 │   ├── test_classifier.py    finance/classify.py parser / reconcile
 │   ├── test_impex.py         impex.py CLI (import/export/backup/auth gate)
@@ -176,12 +171,11 @@ higher-level ones:
    impex.py           ──▶ finance/ ──▶ (stdlib only)
                        └─▶ backend/
 
-   scripts/           ──▶ finance/ (seed_auto_rules.py)
-                       └─▶ (no backend import)
+   scripts/           ──▶ (no finance/ or backend import)
 ```
 
 A handy mental model: **`backend/` is the only thing that touches the
-database; `finance/` is the only thing that knows the rule language; the
+database; `finance/` holds the statement/holdings parsers; the
 entry-point scripts at the root orchestrate them and never get imported
 themselves.**
 
@@ -238,8 +232,8 @@ deletes it from both sides.
 
 The CLI (`impex.py import …`) is the only path that writes entries. It
 parses a CSV, **reconciles** every ICICI block (sanity-check: opening balance +
-Σdeposits − Σwithdrawals = closing balance), then classifies each row with
-the rule language and writes one row per transaction into the database.
+Σdeposits − Σwithdrawals = closing balance), then writes one row per transaction into the
+database (rows are assumed already classified; unassigned ones default by direction).
 Columnar CSVs that already carry `KIND`/`CATEGORY` (an `impex.py export`
 round-trip) skip the reconcile gate and use those values verbatim, with
 income forced to the default category.
@@ -249,7 +243,6 @@ sequenceDiagram
     autonumber
     participant CLI as impex.py
     participant CL as finance.classify
-    participant RS as finance.rules.RuleSet
     participant B as backend.FinanceBackend
     participant D as sqlite
 
@@ -259,14 +252,8 @@ sequenceDiagram
     loop each block
       CLI->>CL: reconcile(opening, txs)
       alt PASS
-        CLI->>RS: combined (manual-rules.csv then auto-rules.csv)
         loop each tx
-          CLI->>RS: match(particulars, direction, mode, amount)
-          alt rule matched
-            RS-->>CLI: (kind, category)
-          else no match
-            CLI->>CLI: default-kind<br/>credit→income, debit→expense, category=UNKNOWN
-          end
+          CLI->>CLI: kind/category as specified, else<br/>credit→income, debit→expense, category=UNKNOWN
           CLI->>B: upsert_bank_entry(user, account, date, particulars, dep, wd, kind, category)
           B->>D: SELECT row by nkey (user+account+date+particulars+dep+wd)
           alt row absent
@@ -288,9 +275,9 @@ sequenceDiagram
 **Plain-English version:** The CLI reads your CSV one block at a time. A
 block that fails its balance check is **not** an error — its complete rows
 go into a per-FY `failed-<N>.csv` and the run continues (you fix the CSV
-later). A passing block is classified rule-by-rule and upserted into the
+later). A passing block is upserted into the
 database; rows you've already edited in the dashboard are left alone, even
-if the rule would now classify them differently (the `manual_override`
+if the file now classifies them differently (the `manual_override`
 freeze).
 
 ---
@@ -350,7 +337,7 @@ different machine.
 ```mermaid
 flowchart LR
     Repo["repo root"]
-    Dist["dist/<br/>finance/ backend/ personal-finance.py<br/>impex.py review.py README.md<br/>requirements.txt auto-rules.csv"]
+    Dist["dist/<br/>finance/ backend/ personal-finance.py<br/>impex.py README.md<br/>requirements.txt"]
     Zip["dist.zip"]
     Seed{{"--with-db PATH"}}
 
@@ -360,8 +347,8 @@ flowchart LR
 ```
 
 `SOURCES` in `scripts/make_dist.py` is the explicit allowlist: the two
-packages, the three root entry-point scripts, the README, the requirements
-file, and the locally-seeded `auto-rules.csv`. Runtime data (`data/`,
+packages, the two root entry-point scripts, the README and the requirements
+file. Runtime data (`data/`,
 `var/`, `output/`, `backup/`, `members.yaml`, the database, secrets) is
 deliberately excluded — those are personal and live outside git
 .
@@ -372,9 +359,9 @@ deliberately excluded — those are personal and live outside git
 
 You've seen the parts. One place deepens the understanding:
 
-- `finance/rules.py` + `tests/test_rules.py` — the rule grammar is the
-  most subtle piece of the codebase. Reading those two files (and running
-  the tests) shows how a row's `kind` and `category` get decided.
+- `finance/classify.py` + `tests/test_classifier.py` — the statement parser
+  and the reconcile gate; reading them (and running the tests) shows how a
+  block of rows is accepted or rejected.
 
 If something in these diagrams disagrees with the code, the code wins —
 update the doc, don't let the diagrams drift.

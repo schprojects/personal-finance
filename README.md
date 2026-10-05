@@ -17,10 +17,10 @@ python3 -m venv .venv
 # bootstrap a member password (each member does this once)
 .venv/bin/python impex.py auth set-password --user <member>
 
-# import bank statements (existing/auto rules) and investment sheets
-.venv/bin/python impex.py import --user <member> --type bank-statement --mode existing
+# import bank statements and investment sheets (entries are assumed
+# already classified; see Importer / exporter)
+.venv/bin/python impex.py import --user <member> --type bank-statement
 .venv/bin/python impex.py import --user <member> --type investments
-# (add --mode auto to also consult OpenRouter and grow auto-rules.csv)
 
 # run the dashboard -- sign in with your member password
 .venv/bin/streamlit run personal-finance.py
@@ -75,13 +75,12 @@ the only surviving CSV artifact is a reconcile-failure.
 # bootstrap a member password (requires the current one once set)
 impex.py auth set-password --user <member>
 
-# import, classified by the rules files
-impex.py import --user <member> --type bank-statement --mode existing
-impex.py import --user <member> --type bank-statement --mode auto   # + OpenRouter
+# import (KIND/CATEGORY used as specified; else credit=income, debit=expense/UNKNOWN)
+impex.py import --user <member> --type bank-statement
 impex.py import --user <member>    --type investments
 
 # read path: CSV exports, whole family by default (--user to narrow)
-impex.py export --login <member> --type bank --fy 2024-25 --out bank.csv
+impex.py export --login <member> --type bank --fy 2024-25 --out bank.csv  # --user <m> narrows to one member
 impex.py export --login <member> --type investments
 
 # safety net
@@ -91,7 +90,8 @@ impex.py restore --from backup/networth-<ts>.db
 
 Password sources: prompt, `--password-file PATH`, or `--password-stdin`
 (saved only in `backend/`, never argv/environ). A wrong password exits non-zero
-before anything is touched. Every import appends a run log under `var/logs/`.
+before anything is touched. Failed attempts (importer and dashboard login) are
+logged to `var/logs/auth.log` (attempted username only). Every import appends a run log under `var/logs/`.
 
 ### Deployable bundle (`dist/`)
 
@@ -100,7 +100,7 @@ before anything is touched. Every import appends a run log under `var/logs/`.
 .venv/bin/python scripts/make_dist.py --with-db var/networth.db  # seed with a database
 ```
 
-`dist/` ships the app + importer + rule engine + `requirements.txt` + this
+`dist/` ships the app + importer + `requirements.txt` + this
 README, minus runtime data and secrets; running `streamlit run
 personal-finance.py` inside `dist/` works as here. `--with-db <path>` copies an
 sqlite db to `dist/var/networth.db`, which is exactly where the app and
@@ -108,22 +108,14 @@ sqlite db to `dist/var/networth.db`, which is exactly where the app and
 configuration. Both `dist/` and `dist.zip` are gitignored build
 artifacts.
 
-Rules (`--mode`): `existing` = manual-rules.csv (if present) then auto-rules.csv;
-`manual` / `auto` restrict to one file; `both` is identical to `existing`.
-First match wins. Rules can be direction-scoped with `@dir:dep` (credits) or
-`@dir:wd` (debits). No match → default-kind fallback: credit = income,
-debit = expense, category `UNKNOWN` (editable in the dashboard); investment
-buys come from the `@dir:wd` rules in your local rule files.
-CSV rows that already carry a `KIND`/`CATEGORY` (e.g. an `impex.py export`
-file re-imported after edits, or a hand-authored statement with those columns)
-are used **as-is** — no rules, no LLM, no default-kind fallback, and no
-deposit→credit rewrite; dates may be `dd-mm-yyyy` or `dd/mm/yyyy`.
-Income, specified or inferred, always lands on its default category.
-`auto` mode additionally classifies never-seen payees via OpenRouter
-(`OPENROUTER_API_KEY`, `OPENROUTER_MODEL` default `openrouter/auto`) and
-appends the suggested keyword rules to `auto-rules.csv` (created on first
-append, deduped) — so a fresh clone with the key set bootstraps its own rules
-and never requires a committed rule file.
+Classification: the importer assumes entries are already classified. Rows
+that carry a `KIND`/`CATEGORY` (e.g. an `impex.py export` file re-imported
+after edits, or a hand-authored statement with those columns) are used **as
+specified**, with no deposit→credit rewrite; dates may be
+`dd-mm-yyyy` or `dd/mm/yyyy`. Where kind/category is unassigned (e.g. a raw
+bank statement) credits become `income` and debits `expense` with category
+`UNKNOWN` (editable in the dashboard). Income always lands on its default
+(empty) category. There are no rule files and no LLM step.
 
 Import semantics: rows are keyed by account + date + particulars + deposit +
 withdrawal — created when new, updated when the classification changed (never
@@ -133,10 +125,9 @@ block no longer stops the run — its rows go to `output/<FY>/failed-<N>.csv`
 (complete rows, deduped across runs) and the failure is logged.
 
 `finance/classify.py`'s write path, `repo/`, `review-*.csv`, `rules.txt`, and
-`manual.csv` are retired. `data/` stays the import source; `auto-rules.csv`,
-`manual-rules.csv`
-and `rules.txt` are all gitignored — the rule files are personal-local, like
-`members.yaml` and the database.
+`manual.csv` are retired, as are the rule files (`auto-rules.csv`,
+`manual-rules.csv`), the OpenRouter client and `review.py`.
+`data/` stays the import source.
 
 ### Dashboard (`personal-finance.py`)
 
@@ -166,7 +157,7 @@ market at the latest NAV. No column, no XIRR — the cell shows `—`.
 `fy_of`, `inr`, `money`, `payee_key`, `load_members`, `statements_for`,
 `investments_for`, `BASELINE_EXCLUDED` — shared by the importer and the
 dashboard, living in the `finance/` package next to the rest of the domain
-modules (`rules`, `holdings`, `llm`, `classify`).
+modules (`holdings`, `classify`).
 
 ### Tests (`tests/`)
 
@@ -179,7 +170,7 @@ sheet parsing and return calculation, the `backend/` database (migrations,
 PBKDF2 passwords + session tokens, entry create/update/skip, UNKNOWN editing,
 investment upsert), the `impex` CLI (import/upsert semantics,
 reconcile-FAIL → `failed-<N>.csv` dedup, investment typing, export scope and
-format, backup/restore round-trip, auth gate, OpenRouter rule extraction), and
+format, backup/restore round-trip, auth gate), and
 the dashboard via streamlit's `AppTest` (`tests/test_app.py` — all five pages,
 family/me scope, login gate; `tests/test_dashboard_values.py` — value-level
 assertions over a clean two-member, two-FY sample: exact Overview figures per
@@ -197,7 +188,7 @@ fy defaults to April and the session TTL to 10 minutes — both tunable in
 `settings`. `impex.py` is the bulk writer; the dashboard reads and edits it.
 Dashboard sessions ride a same-Site `stmtok` cookie bridged through `st.html`
 with `unsafe_allow_javascript=True` (Streamlit has no cookie API), validated
-server-side; `Sign out` revokes the token.
+server-side; `Sign out` revokes the token; the token is revalidated on every rerun, so expiry or revocation ends the session at once.
 
 To use a specific database (any copy you keep elsewhere, or a backup),
 export its path before running the app or any `impex.py` subcommand —
@@ -213,14 +204,10 @@ export FINANCE_DB=/path/to/networth.db
 | File | Purpose |
 |---|---|
 | `finance/common.py` | shared helpers |
-| `finance/rules.py` | rule language (Rule / RuleSet) for `rules.txt`, `auto-rules.csv`, `manual-rules.csv` |
 | `finance/classify.py` | statement parser + reconciliation (parsing reused by impex) |
 | `finance/holdings.py` | investment sheet parser + XIRR |
-| `finance/llm.py` | OpenRouter auto-mode client (stdlib-only) |
 | `requirements.txt` | pip deps for the dist bundle (streamlit, plotly, pyyaml) |
-| `scripts/seed_auto_rules.py` | regenerates local `auto-rules.csv` from `rules.txt` (equivalence-checked) |
 | `scripts/make_dist.py` | assembles `dist/` + `dist.zip` |
-| `review.py` | rules.txt suggestions from the latest `review-<N>.csv` |
 | `personal-finance.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
 | `impex.py` | gated importer/exporter CLI (bank → entries, sheets → investments, export/backup/restore) |
 | `backend/` | sqlite system of record (schema, model, auth) |

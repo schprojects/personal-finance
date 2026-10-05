@@ -5,8 +5,8 @@ Usage:
     python scripts/make_dist.py                # fresh dist (no database)
     python scripts/make_dist.py --with-db PATH # seed dist/var/networth.db
 
-Ships: personal-finance.py, impex.py, review.py, finance/ (common, rules,
-holdings, llm, classify), backend/ (schema/model/auth/db/paths),
+Ships: personal-finance.py, impex.py, finance/ (common,
+holdings, classify), backend/ (schema/model/auth/db/paths),
 requirements.txt, README.md. Runtime dirs (data/, var/,
 backup/, output/, tests/, specs/, members.yaml, and the
 rule files) are intentionally excluded.
@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
-SOURCES = ["personal-finance.py", "impex.py", "review.py", "finance", "backend",
+SOURCES = ["personal-finance.py", "impex.py", "finance", "backend",
            "README.md", "requirements.txt"]
 
 

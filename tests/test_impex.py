@@ -9,8 +9,6 @@ from unittest import mock
 
 import impex
 from backend import FinanceBackend
-from finance.llm import parse_response
-from finance.rules import RuleSet
 
 MEMBERS = [{"name": "a", "data_dir": "data/a"}, {"name": "b", "data_dir": "data/b"}]
 
@@ -38,13 +36,6 @@ def make_carrier_file(path, rows):
             w.writerow(list(r))
 
 
-RULES_CSV = (
-    "expense,Groceries,STARBAZAAR\n"
-    "expense,Transport & fuel,MOONSOON @amt<=10000\n"
-    "income,,ACH/INCOME\n"
-)
-
-
 class TestImportBankStatements(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.TemporaryDirectory()
@@ -53,7 +44,6 @@ class TestImportBankStatements(unittest.TestCase):
         data = os.path.join(self.d.name, "data")
         self.a_dir = os.path.join(data, "a", "bank-statements", "2024-25")
         os.makedirs(self.a_dir, exist_ok=True)
-        self.rules = RuleSet.parse(RULES_CSV)
         self.ctx = contextlib.ExitStack()
         self.ctx.enter_context(contextlib.chdir(self.d.name))
         self.ctx.enter_context(mock.patch("impex.load_members", return_value=MEMBERS))
@@ -63,23 +53,22 @@ class TestImportBankStatements(unittest.TestCase):
         self.backend.close()
         self.d.cleanup()
 
-    def test_imports_classifies_and_is_idempotent(self):
+    def test_unclassified_rows_default_by_direction_and_idempotent(self):
         make_statement(os.path.join(self.a_dir, "s.csv"), [
             ["01-04-2024", "", "B/F", 0, 0, 1000.00],
             ["02-04-2024", "", "UPI/STARBAZAAR MART@okpay", 0, 100, 900.00],
             ["03-04-2024", "", "ACH/INCOME", 250, 0, 1150.00],
             ["04-04-2024", "", "RANDOM-UNKNOWN-PAYEE", 0, 777, 373.00],
         ])
-        c1 = impex.import_bank_statements(self.backend, "a", self.rules)
+        c1 = impex.import_bank_statements(self.backend, "a")
         self.assertEqual(c1["created"], 3)
         rows = self.backend.entries(user_ids=["a"])
         cats = {(r["kind"], r["category"]) for r in rows}
-        self.assertIn(("expense", "Groceries"), cats)
-        self.assertIn(("income", ""), cats)
-        # RANDOM-UNKNOWN-PAYEE hits the default fallback: debit -> expense/UNKNOWN
-        self.assertIn(("expense", "UNKNOWN"), cats)
+        # no kind/category supplied: credit -> income (no category),
+        # debit -> expense / UNKNOWN
+        self.assertEqual(cats, {("income", ""), ("expense", "UNKNOWN")})
         self.assertEqual([r["fy"] for r in rows], ["2024-25"] * 3)
-        c2 = impex.import_bank_statements(self.backend, "a", self.rules)
+        c2 = impex.import_bank_statements(self.backend, "a")
         self.assertEqual(c2["skipped"], 3)
 
     def test_reconcile_fail_writes_failed_csv_and_dedups(self):
@@ -88,7 +77,7 @@ class TestImportBankStatements(unittest.TestCase):
             ["01-04-2024", "", "B/F", 0, 0, 1000.00],
             ["02-04-2024", "", "UPI/starbazaar@ok/Payment", 0, 100, 1000.00],
         ])
-        c = impex.import_bank_statements(self.backend, "a", self.rules)
+        c = impex.import_bank_statements(self.backend, "a")
         self.assertEqual(c["created"], 0)
         f = os.path.join("output", "2024-25", "failed-1.csv")
         self.assertTrue(os.path.exists(f))
@@ -96,13 +85,14 @@ class TestImportBankStatements(unittest.TestCase):
             got = list(csv.DictReader(fh))
         self.assertEqual(len(got), 1)
         self.assertEqual(got[0]["PARTICULARS"], "UPI/starbazaar@ok/Payment")
-        impex.import_bank_statements(self.backend, "a", self.rules)
+        impex.import_bank_statements(self.backend, "a")
         self.assertFalse(os.path.exists(
             os.path.join("output", "2024-25", "failed-2.csv")))
 
     def test_carrier_csv_honors_specified_kind_category(self):
-        # exporter-round-trip file: specified values win (no rules/LLM/credit
-        # rewrite), income keeps only the default category, absent values infer.
+        # exporter-round-trip file: specified values win (no credit
+        # rewrite), income keeps only the default category, absent values default
+        # by direction.
         make_carrier_file(os.path.join(self.a_dir, "carrier.csv"), [
             ["a", "A", "01-04-2024", "", "FOO-PAYEE", 0, 100, 900,
              "expense", "Groceries", "2024-25"],
@@ -113,7 +103,7 @@ class TestImportBankStatements(unittest.TestCase):
             ["a", "A", "04-04-2024", "", "SALARY-ACH", 500, 0, 1550,
              "income", "Salary", "2024-25"],
         ])
-        c = impex.import_bank_statements(self.backend, "a", self.rules)
+        c = impex.import_bank_statements(self.backend, "a")
         self.assertEqual(c["created"], 4)
         rows = self.backend.entries(user_ids=["a"])
         by_part = {r["particulars"]: r for r in rows}
@@ -122,13 +112,24 @@ class TestImportBankStatements(unittest.TestCase):
                           by_part["FOO-PAYEE"]["category"]), ("expense", "Groceries"))
         self.assertEqual((by_part["BAR-REFUND"]["kind"],
                           by_part["BAR-REFUND"]["category"]), ("expense", "Refund"))
-        # not specified -> normal inference (rule match on STARBAZAAR)
+        # not specified -> default by direction (debit -> expense/UNKNOWN)
         self.assertEqual((by_part["UPI/STARBAZAAR MART@okpay"]["kind"],
                           by_part["UPI/STARBAZAAR MART@okpay"]["category"]),
-                         ("expense", "Groceries"))
+                         ("expense", "UNKNOWN"))
         # income has ONLY the default category
         self.assertEqual((by_part["SALARY-ACH"]["kind"],
                           by_part["SALARY-ACH"]["category"]), ("income", ""))
+
+    def test_multi_account_carrier_keeps_each_row_account(self):
+        make_carrier_file(os.path.join(self.a_dir, "multi.csv"), [
+            ["a", "ACC1", "01-04-2024", "", "P1", 0, 10, 90, "expense", "Groceries", "2024-25"],
+            ["a", "ACC2", "02-04-2024", "", "P2", 0, 20, 80, "expense", "Groceries", "2024-25"],
+            ["a", "ACC1", "03-04-2024", "", "P3", 0, 30, 60, "expense", "Groceries", "2024-25"],
+        ])
+        impex.import_bank_statements(self.backend, "a")
+        got = {r["particulars"]: r["account"]
+               for r in self.backend.entries(user_ids=["a"])}
+        self.assertEqual(got, {"P1": "ACC1", "P2": "ACC2", "P3": "ACC1"})
 
     def test_carrier_csv_dd_mm_yyyy_dates(self):
         # hand-authored carrier file with dd/mm/yyyy dates (like mamta_FY17-18)
@@ -138,7 +139,7 @@ class TestImportBankStatements(unittest.TestCase):
             ["a", "?", "01/02/2017", "", "ACH/WIPRO", 10, 0, 28808.44,
              "income", "", "2016-17"],
         ])
-        c = impex.import_bank_statements(self.backend, "a", self.rules)
+        c = impex.import_bank_statements(self.backend, "a")
         self.assertEqual(c["created"], 2)
         rows = self.backend.entries(user_ids=["a"])
         by_part = {r["particulars"]: r for r in rows}
@@ -147,19 +148,6 @@ class TestImportBankStatements(unittest.TestCase):
         self.assertEqual(by_part["PKT/BUY STUFF"]["category"], "Misc & small")
         self.assertEqual((by_part["ACH/WIPRO"]["kind"],
                           by_part["ACH/WIPRO"]["category"]), ("income", ""))
-
-    def test_bad_match_guard_and_credit(self):
-        # @amt qualifier + deposits-become-credit
-        make_statement(os.path.join(self.a_dir, "s.csv"), [
-            ["01-04-2024", "", "B/F", 0, 0, 1000.00],
-            ["02-04-2024", "", "UPI/moonsoontaxi@ok/x", 0, 500, 500.00],
-            ["03-04-2024", "", "UPI/moonsoontaxi@ok/y", 0, 20000, -19500.00],
-        ])
-        impex.import_bank_statements(self.backend, "a", self.rules)
-        rows = self.backend.entries(user_ids=["a"])
-        by_part = {r["particulars"]: r for r in rows}
-        self.assertEqual(by_part["UPI/moonsoontaxi@ok/x"]["category"], "Transport & fuel")
-        self.assertEqual(by_part["UPI/moonsoontaxi@ok/y"]["category"], "UNKNOWN")
 
     def test_investments_import(self):
         inv = os.path.join(self.d.name, "data", "a", "investments")
@@ -209,11 +197,20 @@ class TestExport(unittest.TestCase):
         self.assertEqual(first, ["a", "A", "01-04-2024", "", "a-pay",
                                  "0.00", "100.00", "900.00", "expense",
                                  "Groceries", "2024-25"])
+        # --user selects that member, not the logged-in one
+        out = io.StringIO()
+        n = impex.export_entries(self.backend, "a", ns(
+            user="b", type="bank", fy=None, kind=None, category=None,
+            account=None, q=None), out)
+        self.assertEqual(n, 1)
+        self.assertEqual(out.getvalue().splitlines()[1].split(",")[:5],
+                         ["b", "A", "01-04-2024", "", "b-pay"])
 
 
 class TestBackupRestore(unittest.TestCase):
     def test_backup_then_restore_roundtrip(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(
+                os.environ, {"FINANCE_DB": os.path.join(d, "db.sqlite")}):
             b1 = FinanceBackend(path=os.path.join(d, "db.sqlite"))
             b1.seed_members([{"name": "a", "data_dir": "data/a"}])
             b1.upsert_bank_entry("a", account="A", date="2024-04-01", mode="",
@@ -225,32 +222,29 @@ class TestBackupRestore(unittest.TestCase):
             b1.close()
             impex.restore(target)
             b2 = FinanceBackend(path=os.path.join(d, "db.sqlite"))
+            self.addCleanup(b2.close)
             self.assertEqual(len(b2.entries(user_ids=["a"])), 1)
             with self.assertRaises(SystemExit):
                 impex.restore(os.path.join(d, "not-a-db.txt"))
 
 
-class TestLlmParseAndAppend(unittest.TestCase):
-    def test_parse_response_filters_unknown_categories(self):
-        text = "0\tGroceries\n1\tNOT-KNOWN\njunk\n2\tTransport & fuel\n"
-        got = parse_response(text, ["Groceries", "Transport & fuel"])
-        self.assertEqual(got, {0: "Groceries", 2: "Transport & fuel"})
-
-    def test_append_auto_rules_dedups_by_keyword(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "auto-rules.csv")
-            with open(path, "w") as f:
-                f.write("expense,Groceries,STARBAZAAR\n")
-            added = impex.append_auto_rules(path, {0: "Groceries", 1: "Fuel"},
-                                            ["STARBAZAAR", "PETROL|DIESEL"])
-            self.assertEqual(added, 1)
-            with open(path) as f:
-                text = f.read()
-            self.assertIn("PETROL|DIESEL", text)
-            self.assertEqual(text.count("STARBAZAAR"), 1)
-
-
 class TestCliGate(unittest.TestCase):
+    def test_auth_failure_is_logged(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+                mock.patch.dict("os.environ", {"FINANCE_DB": os.path.join(d, "db.sqlite")}), \
+                mock.patch("impex.load_members", return_value=MEMBERS):
+            b = FinanceBackend()
+            b.seed_members(MEMBERS)
+            b.set_password("a", "pw")
+            b.close()
+            with mock.patch("impex.sys.stdin", new=io.StringIO("WRONG\n")):
+                with self.assertRaises(SystemExit):
+                    impex.main(["import", "--user", "a", "--password-stdin"])
+            with open(os.path.join("var", "logs", "auth.log")) as f:
+                text = f.read()
+            self.assertIn("auth-failure source=impex-import user=a", text)
+            self.assertNotIn("WRONG", text)
+
     def test_cli_import_with_wrong_password_exits_without_changes(self):
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
                 mock.patch.dict("os.environ", {"FINANCE_DB": os.path.join(d, "db.sqlite")}), \
@@ -281,7 +275,7 @@ class TestCliGate(unittest.TestCase):
             b = FinanceBackend()
             rows = b.entries(user_ids=["a"])
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["category"], "Groceries")
+            self.assertEqual((rows[0]["kind"], rows[0]["category"]), ("expense", "UNKNOWN"))
 
 
 if __name__ == "__main__":

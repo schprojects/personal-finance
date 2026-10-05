@@ -4,7 +4,6 @@
 Gates, imports, exports:
   impex.py auth set-password --user X
   impex.py import --user X --type bank-statement|investments
-                   [--mode existing|auto|manual|both] [--manual-rules PATH]
   impex.py export --login X [--user U] [--type bank|investments] [filters] [--out FILE]
   impex.py backup [--dest DIR]
   impex.py restore --from FILE
@@ -12,8 +11,9 @@ Gates, imports, exports:
 Every import/export authenticates (interactive password, --password-file, or
 --password-stdin); auth failure exits non-zero before any read/write.
 The database is the system of record: bank statements become `entries`,
-investment sheets become `investments`. Unmatched transactions are marked
-category UNKNOWN (editable in the dashboard). Reconcile-failed blocks go to
+investment sheets become `investments`. Entries are assumed already
+classified (KIND/CATEGORY columns used as specified); otherwise credits are
+INCOME (no category) and debits are EXPENSE / UNKNOWN (editable in the dashboard). Reconcile-failed blocks go to
 output/<FY>/failed-<N>.csv (complete rows, deduped). Data files are never
 touched.
 """
@@ -31,17 +31,13 @@ import time
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from backend import FinanceBackend, UNKNOWN
+from backend import FinanceBackend, UNKNOWN, auth
 from backend.model import nkey
 from backend.paths import db_path
 from finance.classify import parse_blocks, reconcile
 from finance.common import load_members, money, statements_for
 from finance.holdings import is_mf_sheet, parse_label_rows, parse_mf_sheet
-from finance.llm import classify_unmatched
-from finance.rules import RuleSet, _suggest_keyword
 
-AUTO_RULES = os.path.join(BASE, "auto-rules.csv")
-DEFAULT_MANUAL = os.path.join(BASE, "manual-rules.csv")
 FAILED_COLS = ["MEMBER", "FILE", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
                "DEPOSIT", "WITHDRAWAL", "BALANCE"]
 EXPORT_COLS = ["MEMBER", "ACCOUNT", "DATE", "MODE", "PARTICULARS", "DEPOSIT",
@@ -87,6 +83,7 @@ def _pw(label, args, flag_prefix):
 def authenticate(backend, username, args):
     pw = _pw(f"password for {username}", args, "password")
     if not backend.check_password(username, pw):
+        auth.log_auth_failure(f"impex-{args.cmd}", username)
         sys.exit(f"authentication failed for {username!r}; nothing was read or changed")
 
 
@@ -97,26 +94,6 @@ def finish_run(lines, tag):
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
     return path
-
-
-def rules_for_mode(mode, manual_path):
-    # manual-rules.csv first (highest precedence), then auto-rules.csv
-    if mode and mode not in ("existing", "manual", "auto", "both"):
-        sys.exit(f"unknown mode {mode!r} (existing|manual|auto|both)")
-    manual = manual_path or (DEFAULT_MANUAL
-                             if os.path.exists(DEFAULT_MANUAL) else None)
-    if mode in ("manual",):
-        if not manual:
-            sys.exit("manual mode needs a rules file (--manual-rules PATH)")
-        rs = RuleSet.combined(manual, None)
-    elif mode in ("auto",):
-        rs = RuleSet.combined(None, AUTO_RULES)
-    else:  # existing, both
-        rs = RuleSet.combined(manual, AUTO_RULES)
-    if not rs.rules:
-        print("  no rule files present; unmatched rows fall back to default-kind "
-              "(credit=income, debit=expense, category UNKNOWN)")
-    return rs
 
 
 # --------------------------------------------------------------------------
@@ -180,31 +157,9 @@ def write_failed(failed, log):
 
 
 # --------------------------------------------------------------------------
-# auto mode
-# --------------------------------------------------------------------------
-def append_auto_rules(auto_path, results, keywords):
-    """Append expense rules the LLM produced, unless the keyword is taken."""
-    existing = set()
-    if os.path.exists(auto_path):
-        existing = set().union(*(r.keywords for r in RuleSet.from_csv(auto_path).rules))
-    added = 0
-    with open(auto_path, "a", newline="") as f:
-        w = csv.writer(f)
-        for idx, cat in sorted(results.items()):
-            kw = keywords[idx]
-            if cat == UNKNOWN or not kw or kw in existing:
-                continue
-            w.writerow(["expense", cat, kw])
-            existing.add(kw)
-            added += 1
-    return added
-
-
-# --------------------------------------------------------------------------
 # imports
 # --------------------------------------------------------------------------
-def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
-                           auto_path=AUTO_RULES):
+def import_bank_statements(backend, owner):
     members = {m["name"]: m for m in load_members()}
     member = members.get(owner)
     if not member:
@@ -212,7 +167,7 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
 
     counts = dict(created=0, updated=0, skipped=0, manual_override=0)
     log = [f"import bank-statements --user {owner}"]
-    failed, prep = {}, []
+    failed = {}
     for m, path in statements_for([member]):
         for acct, txs in parse_blocks(path):
             carrier = bool(txs and txs[0].get("_carrier"))
@@ -233,60 +188,18 @@ def import_bank_statements(backend, owner, rules, *, llm_enabled=False,
                 continue
             for t in txs:
                 date_iso = _iso(t["date"])
-                dir_ = "dep" if t["dep"] > 0 else "wd"
-                specified = bool(t.get("kind") or t.get("category"))
-                if specified:
-                    rr = (t.get("kind"), t.get("category"))
-                else:
-                    rr = rules.match(t["part"], t["mode"], t["wd"] or t["dep"],
-                                     dir_=dir_)
-                prep.append({"account": acct, "date": date_iso, "mode": t["mode"],
-                             "part": t["part"], "dep": t["dep"], "wd": t["wd"],
-                             "bal": t["bal"], "file": os.path.basename(path),
-                             "match": rr, "matched": rr is not None,
-                             "carrier": specified})
+                kind = t.get("kind") or ("income" if t["dep"] > 0 else "expense")
+                cat = t.get("category") or ("" if kind == "income" else UNKNOWN)
+                if kind == "income":
+                    cat = ""  # income has only the default category
+                action = backend.upsert_bank_entry(
+                    owner, account=acct, date=date_iso, mode=t["mode"],
+                    particulars=t["part"], deposit=t["dep"], withdrawal=t["wd"],
+                    balance=t["bal"], kind=kind, category=cat,
+                    file=os.path.basename(path))
+                counts[action] += 1
             backend.con.commit()
 
-    if llm_enabled:
-        targets = [p for p in prep if not p["matched"]]
-        if targets:
-            cats = [c["label"] for c in backend.categories()]
-            print(f"  consulting OpenRouter for {len(targets)} unmatched rows...")
-            results = classify_unmatched([p["part"] for p in targets], cats)
-            added = append_auto_rules(
-                auto_path, results, [_suggest_keyword(p["part"]) or ""
-                                     for p in targets])
-            applied = 0
-            for i, p in enumerate(targets):
-                if i in results:
-                    p["match"] = ("expense", results[i])
-                    p["matched"] = True
-                    applied += 1
-            log.append(f"  LLM: {applied} classified, {len(results)} rules appended, "
-                       f"{added} new rules written")
-            print(f"  LLM: {applied} classified now, {added} rules appended "
-                  f"to {os.path.basename(auto_path)}")
-
-    for p in prep:
-        if not p["matched"]:
-            if p["dep"] > 0:
-                kind, cat = "income", ""
-            else:
-                kind, cat = "expense", UNKNOWN
-        else:
-            kind, cat = p["match"]
-            if kind is None:
-                kind = "income" if p["dep"] > 0 else "expense"
-            if p["dep"] > 0 and p["wd"] == 0 and not p["carrier"] \
-                    and kind in ("expense", "review"):
-                kind, cat = "credit", ""
-        if kind == "income":
-            cat = ""  # income has only the default category
-        action = backend.upsert_bank_entry(
-            owner, account=p["account"], date=p["date"], mode=p["mode"],
-            particulars=p["part"], deposit=p["dep"], withdrawal=p["wd"],
-            balance=p["bal"], kind=kind, category=cat, file=p["file"])
-        counts[action] += 1
 
     write_failed(failed, log)
     log.append(f"  result: {counts}")
@@ -366,9 +279,10 @@ def _fmt(x):
 
 
 def export_entries(backend, login, args, out):
-    scope = [login] if args.user else backend.family_user_ids(login)
-    if args.user and args.user not in backend.family_user_ids(login):
+    family = backend.family_user_ids(login)
+    if args.user and args.user not in family:
         sys.exit(f"{args.user!r} is not in your family")
+    scope = [args.user] if args.user else family
     if args.type == "investments":
         rows = backend.investments(user_ids=scope)
         cols = INVEST_EXPORT_COLS
@@ -438,9 +352,6 @@ def build_parser():
     im.add_argument("--user", required=True)
     im.add_argument("--type", default="bank-statement",
                     choices=["bank-statement", "investments"])
-    im.add_argument("--mode", default="existing",
-                    choices=["existing", "manual", "auto", "both"])
-    im.add_argument("--manual-rules")
     im.add_argument("--password-file")
     im.add_argument("--password-stdin", action="store_true")
 
@@ -493,10 +404,7 @@ def main(argv=None):
         if args.type == "investments":
             import_investments(backend, args.user)
         else:
-            rules = rules_for_mode(args.mode, args.manual_rules)
-            import_bank_statements(
-                backend, args.user, rules,
-                llm_enabled=args.mode in ("auto", "both"))
+            import_bank_statements(backend, args.user)
         return
 
     if args.cmd == "export":

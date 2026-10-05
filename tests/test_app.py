@@ -8,6 +8,7 @@ import os
 import tempfile
 import threading
 import unittest
+import contextlib
 import importlib.util
 from unittest import mock
 
@@ -83,6 +84,7 @@ class TestDashboardPages(unittest.TestCase):
     def _at(self):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER_A)
+        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("a", "pw")
         return at
 
     def test_all_pages_render(self):
@@ -109,6 +111,39 @@ class TestDashboardPages(unittest.TestCase):
                 self.assertEqual(ids, {"a"})
             finally:
                 b.close()
+
+    def test_expired_or_revoked_session_returns_to_login(self):
+        for how in ("expire", "revoke"):
+            with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
+                at = self._at()
+                at.run()
+                self.assertFalse(at.text_input)  # signed in: no login form
+                b = FinanceBackend(path=self.db)
+                if how == "expire":
+                    b.con.execute("UPDATE auth_tokens SET expires_at = ?",
+                                  ("2000-01-01T00:00:00+00:00",))
+                    b.con.commit()
+                else:
+                    b.revoke_session(at.session_state["token"])
+                b.close()
+                at.run()
+                self.assertFalse(at.exception)
+                self.assertTrue(any("Username" in str(x) for x in at.text_input),
+                                f"{how}: login form expected")
+
+    def test_failed_login_is_logged(self):
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}), \
+                contextlib.chdir(self.d.name):
+            at = AppTest.from_file(APP)
+            at.run()
+            at.text_input[0].set_value("a")
+            at.text_input[1].set_value("WRONG-pw")
+            at.button[0].click()
+            at.run()
+            with open(os.path.join("var", "logs", "auth.log")) as f:
+                text = f.read()
+            self.assertIn("auth-failure source=dashboard user=a", text)
+            self.assertNotIn("WRONG-pw", text)
 
     def test_login_page_when_anonymous(self):
         with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
@@ -289,7 +324,8 @@ class TestEditCallbacks(unittest.TestCase):
         self.b = FinanceBackend(path=self.db)
         self.rows = self.b.entries(user_ids=["a"])
         self.rowmap = [(r["id"], r["user_id"]) for r in self.rows]
-        self.session = {"scope": "Me", "user": {"id": "a"}}
+        self.session = {"scope": "Me", "user": {"id": "a"},
+                        "token": self.b.issue_session("a", "pw")}
 
     def tearDown(self):
         self.b.close()

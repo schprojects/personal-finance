@@ -6,6 +6,8 @@ replayed. Tokens are issued/validated by the backend, not decoded (no JWT).
 import datetime as dt
 import hashlib
 import hmac
+import os
+import re
 import secrets
 
 ITERATIONS = 600_000
@@ -36,3 +38,13 @@ def token_digest(raw):
 
 def now_utc():
     return dt.datetime.now(dt.timezone.utc)
+
+
+def log_auth_failure(source, username, log_dir=os.path.join("var", "logs")):
+    """Append one line to <log_dir>/auth.log for a failed login/gate attempt.
+    Only the (sanitised) attempted username is recorded -- never the password
+    or a token."""
+    name = re.sub(r"[^\w.@-]", "?", str(username or ""))[:64]
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "auth.log"), "a") as f:
+        f.write(f"{now_utc().isoformat()} auth-failure source={source} user={name}\n")

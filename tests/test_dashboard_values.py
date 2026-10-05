@@ -121,6 +121,7 @@ class TestOverviewValues(unittest.TestCase):
     def _at(self, scope="Family"):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER)
+        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("alice", "pw")
         at.run()
         if scope != "Family":
             at.radio(key="scope").set_value("Me")
@@ -203,6 +204,7 @@ class TestTransactionsValues(unittest.TestCase):
     def _at(self, scope="Family"):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER)
+        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("alice", "pw")
         at.run()
         at.radio(key="page").set_value("Transactions")
         at.run()
@@ -243,6 +245,7 @@ class TestCategoriesValues(unittest.TestCase):
     def _at(self, scope="Family"):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER)
+        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("alice", "pw")
         at.run()
         at.radio(key="page").set_value("Categories")
         at.run()
@@ -312,6 +315,7 @@ class TestReviewReadOnly(unittest.TestCase):
     def _at(self, scope="Family"):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER)
+        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("alice", "pw")
         at.run()
         at.radio(key="page").set_value("Review")
         at.run()
@@ -354,6 +358,7 @@ class TestHoldingsReadOnly(unittest.TestCase):
     def _at(self, scope="Family"):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER)
+        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("alice", "pw")
         at.run()
         at.radio(key="page").set_value("Holdings")
         at.run()

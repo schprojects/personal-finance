@@ -17,7 +17,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from backend import FinanceBackend, UNKNOWN
+from backend import FinanceBackend, UNKNOWN, auth
 from finance.common import BASELINE_EXCLUDED, inr, payee_key
 from finance.holdings import absolute_return_pct, xirr
 
@@ -46,9 +46,17 @@ JS_CLEAR = f"""
 # --------------------------------------------------------------------------
 # auth
 # --------------------------------------------------------------------------
-def session_user():
+def session_user(backend):
+    """The signed-in user, revalidated against the token store on every call:
+    an expired, revoked or missing token drops the session state (auth-specs)."""
     me = st.session_state.get("user")
-    return me if me and me.get("id") else None
+    if not (me and me.get("id")):
+        return None
+    if backend.user_for_session(st.session_state.get("token")) is None:
+        st.session_state.pop("user", None)
+        st.session_state.pop("token", None)
+        return None
+    return me
 
 
 def restore_token(backend):
@@ -78,6 +86,7 @@ def login_ui(backend):
         if ok:
             raw = backend.issue_session(username.strip(), password)
             if not raw:
+                auth.log_auth_failure("dashboard", username)
                 st.error("Invalid username or password")
             else:
                 st.session_state.user = backend.user_for_session(raw)
@@ -91,12 +100,12 @@ def login_ui(backend):
 
 
 def auth_gate(backend):
-    me = session_user()
+    me = session_user(backend)
     if not me:
         if not st.query_params.get("probe"):
             st.html(JS_PROBE, unsafe_allow_javascript=True)
         restore_token(backend)
-        if not session_user():
+        if not session_user(backend):
             login_ui(backend)
         return None
     return me
@@ -240,7 +249,8 @@ def on_entry_edited(backend, key, rowmap, sel_key=None):
     cell edits and track the Select checkbox column (session state only)."""
     if st.session_state.get("scope") != "Me":
         return
-    me = session_user()
+    with _write_backend(backend) as w:
+        me = session_user(w)
     if not me:
         return
     edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
@@ -275,7 +285,8 @@ def on_investment_edited(backend, key, rowmap):
     """data_editor on_change for Holdings: commit cell edits."""
     if st.session_state.get("scope") != "Me":
         return
-    me = session_user()
+    with _write_backend(backend) as w:
+        me = session_user(w)
     if not me:
         return
     edited = (st.session_state.get(key) or {}).get("edited_rows", {}) or {}
