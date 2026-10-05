@@ -122,7 +122,7 @@ withdrawal — created when new, updated when the classification changed (never
 for rows you manually overrode), superseded (skipped) when identical. Statement
 blocks must reconcile first (`opening + Σdep − Σwd == closing`); a FAILING
 block no longer stops the run — its rows go to `output/<FY>/failed-<N>.csv`
-(complete rows, deduped across runs) and the failure is logged.
+(complete rows; rows already in the database or a prior failed file are skipped) and the failure is logged.
 
 `finance/classify.py`'s write path, `repo/`, `review-*.csv`, `rules.txt`, and
 `manual.csv` are retired, as are the rule files (`auto-rules.csv`,

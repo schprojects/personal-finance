@@ -89,6 +89,21 @@ class TestImportBankStatements(unittest.TestCase):
         self.assertFalse(os.path.exists(
             os.path.join("output", "2024-25", "failed-2.csv")))
 
+    def test_failed_block_skips_rows_already_in_database(self):
+        self.backend.upsert_bank_entry(
+            "a", account="XXXXXXXX3404", date="2024-04-02", mode="",
+            particulars="UPI/starbazaar@ok/Payment", deposit=0, withdrawal=100,
+            balance=900, kind="expense", category="Groceries", file="old.csv")
+        make_statement(os.path.join(self.a_dir, "bad.csv"), [
+            ["01-04-2024", "", "B/F", 0, 0, 1000.00],
+            ["02-04-2024", "", "UPI/starbazaar@ok/Payment", 0, 100, 1000.00],
+            ["03-04-2024", "", "UPI/new-payee@ok/x", 0, 5, 1000.00],
+        ])
+        impex.import_bank_statements(self.backend, "a")
+        with open(os.path.join("output", "2024-25", "failed-1.csv"), newline="") as fh:
+            got = [r["PARTICULARS"] for r in csv.DictReader(fh)]
+        self.assertEqual(got, ["UPI/new-payee@ok/x"])
+
     def test_carrier_csv_honors_specified_kind_category(self):
         # exporter-round-trip file: specified values win (no credit
         # rewrite), income keeps only the default category, absent values default

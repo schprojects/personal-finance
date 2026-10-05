@@ -206,6 +206,13 @@ class FinanceBackend:
         self.con.commit()
         return "updated"
 
+    def has_entry(self, user_id, *, account, date, particulars, deposit, withdrawal):
+        """True when the natural key is already stored for this user."""
+        key = nkey(account, date, particulars, float(deposit or 0),
+                   float(withdrawal or 0))
+        return db.one(self.con, "SELECT 1 FROM entries WHERE user_id = ? AND nkey = ?",
+                      (user_id, key)) is not None
+
     def entries(self, *, user_ids=None, kinds=None, category=None, fy=None,
                 date_from=None, date_to=None, account=None, mode=None, q=None,
                 limit=None):

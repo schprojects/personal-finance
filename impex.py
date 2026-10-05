@@ -118,8 +118,9 @@ def prior_failed_keys():
     return keys
 
 
-def write_failed(failed, log):
-    """failed: {fy: [tx-with-meta]}. Writes output/<fy>/failed-<N>.csv."""
+def write_failed(failed, log, backend=None):
+    """failed: {fy: [tx-with-meta]}. Writes output/<fy>/failed-<N>.csv, skipping
+    rows already in the database or in a prior failed-*.csv."""
     for fy, rows in sorted(failed.items()):
         d = os.path.join("output", fy)
         os.makedirs(d, exist_ok=True)
@@ -133,7 +134,9 @@ def write_failed(failed, log):
         for meta, t in rows:
             key = nkey(meta["account"], _iso(t["date"]), t["part"],
                        t["dep"], t["wd"])
-            if key in seen:
+            if key in seen or (backend and backend.has_entry(
+                    meta["member"], account=meta["account"], date=_iso(t["date"]),
+                    particulars=t["part"], deposit=t["dep"], withdrawal=t["wd"])):
                 skipped += 1
                 continue
             seen.add(key)
@@ -201,7 +204,7 @@ def import_bank_statements(backend, owner):
             backend.con.commit()
 
 
-    write_failed(failed, log)
+    write_failed(failed, log, backend)
     log.append(f"  result: {counts}")
     print(f"  result: {counts}")
     path = finish_run(log, "import")
