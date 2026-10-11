@@ -1,0 +1,29 @@
+# Run the dashboard:      docker compose up -d --build
+# Run the importer/CLI:   docker compose run --rm impex <args>
+# Personal data is supplied from the host (bind mounts); nothing is baked in.
+# Create ./members.yaml, ./auto-rules.csv (copy auto-rules.example.csv) and the folders first (see README "Run with Docker").
+x-finance: &finance
+  build: .
+  image: personal-finance:local
+  user: "${UID:-1000}:${GID:-1000}"
+  environment:
+    FINANCE_DB: /app/var/networth.db
+  volumes:
+    - ./var:/app/var
+    - ./data:/app/data
+    - ./output:/app/output
+    - ./backup:/app/backup
+    - ./members.yaml:/app/members.yaml:ro
+    - ./auto-rules.csv:/app/auto-rules.csv:ro
+
+services:
+  app:
+    <<: *finance
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+  impex:
+    <<: *finance
+    entrypoint: ["python", "impex.py"]
+    profiles: ["tools"]

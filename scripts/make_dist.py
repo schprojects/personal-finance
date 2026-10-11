@@ -5,11 +5,13 @@ Usage:
     python scripts/make_dist.py                # fresh dist (no database)
     python scripts/make_dist.py --with-db PATH # seed dist/var/networth.db
 
-Ships: personal-finance.py, impex.py, finance/ (common,
+Ships: personal-finance.py, impex.py, ui_theme.py, .streamlit/ (theme),
+finance/ (common,
 holdings, classify), backend/ (schema/model/auth/db/paths),
-requirements.txt, README.md. Runtime dirs (data/, var/,
-backup/, output/, tests/, specs/, members.yaml, and the
-rule files) are intentionally excluded.
+requirements.txt, README.md, and the container files (Dockerfile,
+docker-compose.yml, .dockerignore). Runtime dirs (data/, var/, backup/,
+output/, tests/, specs/, members.yaml) are intentionally
+excluded.
 """
 import argparse
 import shutil
@@ -20,8 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
-SOURCES = ["personal-finance.py", "impex.py", "finance", "backend",
-           "README.md", "requirements.txt"]
+SOURCES = ["personal-finance.py", "impex.py", "ui_theme.py", ".streamlit",
+           "finance", "backend",
+           "Dockerfile", "docker-compose.yml", ".dockerignore",
+           "README.md", "requirements.txt", "auto-rules.example.csv",
+           "members.example.yaml"]
 
 
 def main() -> int:
@@ -36,6 +41,9 @@ def main() -> int:
     for name in SOURCES:
         src, dst = ROOT / name, DIST / name
         (shutil.copytree if src.is_dir() else shutil.copy)(src, dst)
+
+    if (ROOT / "auto-rules.csv").exists():  # personal rules travel with --with-db users
+        shutil.copy(ROOT / "auto-rules.csv", DIST / "auto-rules.csv")
 
     if args.with_db:
         (DIST / "var").mkdir()

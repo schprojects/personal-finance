@@ -13,3 +13,5 @@ backup/
 dist/
 dist.zip
 [DB-FOLDER]/
+.env
+ui/
