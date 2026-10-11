@@ -55,8 +55,8 @@ browser.
                     your computer
    ┌────────────────────────────────────────────────────────────────────┐
    │                                                                    │
-   │   data/mamta/bank-statements/2024-25/*.csv     raw bank exports     │
-   │   data/mamta/investments/*.csv                holdings sheets      │
+   │   data/<member>/bank-statements/2024-25/*.csv     raw bank exports     │
+   │   data/<member>/investments/*.csv                holdings sheets      │
    │           │                                                          │
    │           │   impex.py import  (CLI, gated by password)              │
    │           ▼                                                          │
@@ -132,7 +132,11 @@ personal-finance/
 ├── finance/                  ← SHARED DOMAIN (imported by the dashboard and the CLI)
 │   ├── common.py             shared helpers (members, money, FY, payee_key, "inr" ₹ formatter)
 │   ├── holdings.py           investment sheet parser + XIRR math
-│   └── classify.py           statement parser + reconciliation; used by impex
+│   ├── classify.py           statement parser + reconciliation; used by impex
+│   ├── rules.py              auto-rules.csv parser + matcher
+│   ├── query.py              read-only SQL WHERE + text filter for Transactions
+│   ├── importing.py          stage → resolve → commit (Import view + impex)
+│   └── exporting.py          CSV export, never overwrites (numeric suffix)
 │
 ├── backend/                  ← PERSISTENCE (the system of record)
 │   ├── schema.py             append-only versioned migrations (PRAGMA user_version)
@@ -142,6 +146,8 @@ personal-finance/
 │   └── __init__.py           re-exports FinanceBackend, UNKNOWN, db_path
 │
 ├── personal-finance.py       ← ENTRY POINT: streamlit dashboard (the web app)
+├── ui_theme.py               look & feel: CSS, hero/kpi/section helpers, chart style
+├── .streamlit/config.toml    light + dark theme and chart colours
 ├── impex.py                  ← ENTRY POINT: CLI for import / export / backup / restore
 │
 ├── scripts/                  ← build / maintenance utilities
@@ -153,7 +159,8 @@ personal-finance/
 │   ├── test_holdings.py      finance/holdings.py XIRR + parsers
 │   ├── test_classifier.py    finance/classify.py parser / reconcile
 │   ├── test_impex.py         impex.py CLI (import/export/backup/auth gate)
-│   ├── test_app.py           dashboard widgets + edit-commit helpers (AppTest)
+│   ├── test_app.py           dashboard pages + staged-edit helpers (AppTest)
+│   ├── test_unified.py       rules, SQL filter, staged import, export, kinds, Import/Export views
 │   └── test_dashboard_values.py  value-level assertions over a clean two-member sample
 │
 ├── specs/                    project contracts (committed)
@@ -282,49 +289,63 @@ freeze).
 
 ---
 
-## 6. Flow — editing a transaction in the dashboard
+## 6. Flow — editing transactions in the dashboard (staged, explicit save)
 
-Two flavours of edit: a single dropdown change in the table, and a bulk
-apply across many rows.
+Edits never touch the database as you make them. They pile up in the
+browser session ("staged") and are written together when you press **Save**
+.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User
-    participant DT as st.data_editor
-    participant CB as on_entry_edited (callback)
-    participant H as commit_entry_edits
+    participant DT as st.data_editor / bulk bar
+    participant S as session state (staged)
     participant B as backend.FinanceBackend
 
-    Note over U,DT: PER-ROW EDIT
-    U->>DT: pick Kind/Category in a cell
-    DT->>CB: on_change(edited_rows)
-    CB->>H: commit_entry_edits(backend, me_id, rowmap, edited)
-    loop each edited row
-      H->>B: update_entry(id, me_id, kind=…, category=…)
-      B-->>H: ok | ValueError
+    U->>DT: change Kind/Category in cells (any number of rows)
+    DT->>S: merge_cell_edits (on_change, no DB access)
+    U->>DT: tick rows (or Select all), pick Kind/Category, Apply to selected
+    DT->>S: stage_bulk (still no DB write)
+    Note right of S: "N unsaved changes" shown; rows stay visible (stable_ids)
+    alt Save
+      U->>S: click Save
+      S->>B: bulk_update_entries(me_id, staged_changes)
+      Note right of B: one transaction, owner-only, all-or-nothing,<br/>manual_override=1
+      B-->>U: saved N rows (stage cleared)
+    else Discard
+      U->>S: click Discard (stage cleared, nothing written)
     end
-    H-->>CB: (applied, errors)
-    CB-->>U: success/warning, rerun
-
-    Note over U,DT: BULK APPLY (selected or all shown)
-    U->>DT: tick Select on rows; pick Kind/Category in the bar; confirm; Apply
-    DT->>CB: on_change(toggled Select cells)
-    CB->>CB: update session-state selection set
-    Note right of CB: no DB write for selection
-    U->>DT: click Apply
-    DT->>BA: bulk_apply_edits(backend, me_id, rowmap, kind, category)
-    loop each row
-      BA->>B: update_entry(id, me_id, kind=…, category=…)
-    end
-    BA-->>DT: (applied, errors)
-    DT->>CB: clear selection set; rerun
 ```
 
+**Filtering** the rows to edit: type a plain-text filter *or* a SQL
+condition (`where kind is empty and category is empty and particulars like
+'%x%'`) — giving both is an error. The SQL is cut down to its WHERE
+condition and run against a temporary in-memory table, so it cannot change
+data.
+
 **What `update_entry` does per row:** verifies you're the owner, validates
-the `kind` is one of the allowed values, creates the category if it
-doesn't exist yet, sets `edited_at` and stamps `manual_override=1` so a
-later re-import won't touch the row.
+the `kind` against the `kinds` table, creates the category if needed, sets
+`edited_at` and stamps `manual_override=1` so a later re-import won't touch
+the row.
+
+### 6b. Flow — Import view (preview in memory, then Save)
+
+```mermaid
+flowchart LR
+    F["CSV path"] --> L["Load file<br/>stage_statement"]
+    L --> R{"Apply auto-rules?"}
+    R -- yes --> A["resolve: CSV value > auto-rule > UNKNOWN"]
+    R -- no --> D["resolve: CSV value > UNKNOWN"]
+    A --> P["preview (in memory)"]
+    D --> P
+    P -- "Save import" --> C["commit_rows → database"]
+    C --> T["open Transactions"]
+```
+
+Export is the mirror image: pick members, years and a path and
+`exporting.export_to_path` writes the CSV, adding `-1`, `-2` … rather than
+overwriting.
 
 ---
 
@@ -337,7 +358,7 @@ different machine.
 ```mermaid
 flowchart LR
     Repo["repo root"]
-    Dist["dist/<br/>finance/ backend/ personal-finance.py<br/>impex.py README.md<br/>requirements.txt"]
+    Dist["dist/<br/>finance/ backend/ personal-finance.py<br/>impex.py README.md<br/>requirements.txt Dockerfile<br/>docker-compose.yml .dockerignore"]
     Zip["dist.zip"]
     Seed{{"--with-db PATH"}}
 
@@ -347,8 +368,8 @@ flowchart LR
 ```
 
 `SOURCES` in `scripts/make_dist.py` is the explicit allowlist: the two
-packages, the two root entry-point scripts, the README and the requirements
-file. Runtime data (`data/`,
+packages, the two root entry-point scripts, the README, the requirements
+file and the container files (Dockerfile, docker-compose.yml, .dockerignore). Runtime data (`data/`,
 `var/`, `output/`, `backup/`, `members.yaml`, the database, secrets) is
 deliberately excluded — those are personal and live outside git
 .

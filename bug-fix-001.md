@@ -1,6 +1,8 @@
 # Bug-fix-001 — Overview metrics not scoped to user/FY; family view editable
 
-Status: Fixed (2026-09-15)
+Status: Fixed (2026-09-15). Note: refunds are now Incoming and no longer
+reduce Net spend, so the expected values below changed — Family all FYs: Incoming
+₹3,70,500 / Net spend ₹9,000; Me: ₹2,70,500 / ₹7,500 (see `tests/test_dashboard_values.py`). A later change counts the sample's ₹1,000 debited transfer as spend: Family ₹10,000 / Me ₹8,500, FY 2025-26 ₹3,500.
 
 ## Symptom
 

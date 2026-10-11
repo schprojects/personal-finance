@@ -31,10 +31,11 @@ investments, and export any stored entries as CSV.
 - The exporter shall be a CLI utility
 - The importer shall be a CLI utility
 - The importer, exporter shall have the ability to produce appropriate logs for the runs
-- the database is the single source of truth: legacy repo/, review-*.csv and rules.txt are retired; data/ CSVs are the import source; output/<fy>/failed-<N>.csv is the only kept output artifact (gitignored); ~~auto-rules.csv is seeded locally from the retired rules.txt and appended to in auto mode; all rule files are gitignored~~
+- the database is the single source of truth: legacy repo/, review-*.csv and rules.txt are retired; data/ CSVs are the import source; output/<fy>/failed-<N>.csv is the only kept output artifact (gitignored); ~~auto-rules.csv is seeded locally from the retired rules.txt and appended to in auto mode; all rule files are gitignored~~. auto-rules.csv is now read by the dashboard Import view only, not by impex.py
 - The importer should be log detailed failures and store the failed entries as failed.csv per each import csv in output/fy/failed.csv pattern, the file should have -<number> postfix to be unique
 - failed entries (complete row) shall be written to output/<fy>/failed-<N>.csv (N = next number after existing failed-*.csv in that FY folder); the run log lists each failure with its reason; the import run continues with the remaining blocks
 - failed rows are the whole reconciled block whose opening + deposits - withdrawals != closing; same exact entry (natural key) - already in the database or in a prior failed-*.csv - is skipped, never failed twice
+- the "already recorded" check for failed rows is per owner: the same entry for a different member is a different entry
 - The importer should identify create, update and skip cases and take action accordinglu
 - natural key for a bank entry = (account, date, particulars, deposit, withdrawal) per user; create (absent), update (present but stored classification differs and the row is not manual_override), skip (present and identical, or manual_override, or already recorded as failed); manual_override rows are never changed by import
 
