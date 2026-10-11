@@ -26,7 +26,7 @@ SOURCES = ["personal-finance.py", "impex.py", "ui_theme.py", ".streamlit",
            "finance", "backend",
            "Dockerfile", "docker-compose.yml", ".dockerignore",
            "README.md", "requirements.txt", "auto-rules.example.csv",
-           "members.example.yaml"]
+           "members.example.yaml", "LICENSE"]
 
 
 def main() -> int:

@@ -313,6 +313,7 @@ image or `dist/`). Order: `FINANCE_DB` environment variable, then `.env`, then
 | `finance/rules.py`, `finance/query.py` | auto-rules (`auto-rules.csv` parser + matcher) and the read-only SQL WHERE filter for Transactions |
 | `finance/importing.py`, `finance/exporting.py` | staged import (stage → resolve → commit) and CSV export with numeric suffix, shared by the dashboard and `impex.py` |
 | `ui-specs/Personal-finance.pdf` | hand-drawn UI layout the dashboard follows |
+| `LICENSE` | 0BSD, free use with no attribution |
 | `requirements.txt` | pinned pip deps (streamlit, plotly, pyyaml), the versions the tests run against; used by the Docker image and the dist bundle |
 | `scripts/make_dist.py` | assembles `dist/` + `dist.zip` |
 | `personal-finance.py` | streamlit dashboard (DB-backed, cookie sessions, owner edits) |
@@ -330,3 +331,8 @@ image or `dist/`). Order: `FINANCE_DB` environment variable, then `.env`, then
 - Historic/seasonal MF tracking
 - PDF export (kaleido via plotly `fig.write_image()` is a drop-in)
 - Calendar heatmap, monthly per-category drill tables
+
+## License
+
+0BSD (BSD Zero Clause): use, change and share this software freely, for any purpose,
+with no attribution required. See `LICENSE`.

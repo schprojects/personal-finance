@@ -72,7 +72,7 @@ class TestContainerFiles(unittest.TestCase):
             root = Path(t)
             for name in ("personal-finance.py", "impex.py", "ui_theme.py", "README.md",
                          "requirements.txt", "Dockerfile", "docker-compose.yml",
-                         ".dockerignore", "auto-rules.example.csv", "members.example.yaml"):
+                         ".dockerignore", "auto-rules.example.csv", "members.example.yaml", "LICENSE"):
                 shutil.copy(ROOT / name, root / name)
             for d in ("finance", "backend", ".streamlit"):
                 shutil.copytree(ROOT / d, root / d,
@@ -83,8 +83,21 @@ class TestContainerFiles(unittest.TestCase):
                                capture_output=True, text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             for name in ("Dockerfile", "docker-compose.yml", ".dockerignore",
-                         "ui_theme.py", ".streamlit/config.toml"):
+                         "ui_theme.py", ".streamlit/config.toml", "LICENSE",
+                         "members.example.yaml", "auto-rules.example.csv"):
                 self.assertTrue((root / "dist" / name).exists(), name)
+
+
+class TestLicenseAndPins(unittest.TestCase):
+    def test_license_is_zero_clause_bsd_and_has_no_attribution_condition(self):
+        text = read("LICENSE")
+        self.assertIn("BSD Zero Clause License", text)
+        self.assertIn("with or without fee", text)
+        self.assertNotIn("Redistributions of source code must retain", text)
+
+    def test_requirements_are_pinned(self):
+        lines = [l for l in read("requirements.txt").splitlines() if l.strip()]
+        self.assertTrue(lines and all("==" in l for l in lines), lines)
 
 
 def _docker_ready():

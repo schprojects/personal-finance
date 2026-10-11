@@ -41,7 +41,7 @@ class TestSpecEndToEnd(unittest.TestCase):
             shutil.copytree(ROOT / source, self.root / source,
                             ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copytree(ROOT / '.streamlit', self.root / '.streamlit')
-        for source in ('impex.py', 'personal-finance.py', 'ui_theme.py', 'requirements.txt', 'auto-rules.example.csv', 'members.example.yaml', 'README.md',
+        for source in ('impex.py', 'personal-finance.py', 'ui_theme.py', 'requirements.txt', 'auto-rules.example.csv', 'members.example.yaml', 'LICENSE', 'README.md',
                        'Dockerfile', 'docker-compose.yml', '.dockerignore'):
             shutil.copy2(ROOT / source, self.root / source)
         (self.root / 'scripts').mkdir()
