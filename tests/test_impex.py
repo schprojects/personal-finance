@@ -91,8 +91,7 @@ class TestImportBankStatements(unittest.TestCase):
 
     def test_failed_block_skips_rows_already_in_database(self):
         self.backend.upsert_bank_entry(
-            "a", account="XXXXXXXX3404", date="2024-04-02", mode="",
-            particulars="UPI/starbazaar@ok/Payment", deposit=0, withdrawal=100,
+            "a", account="XXXXXXXX3404", date="2024-04-02", particulars="UPI/starbazaar@ok/Payment", deposit=0, withdrawal=100,
             balance=900, kind="expense", category="Groceries", file="old.csv")
         make_statement(os.path.join(self.a_dir, "bad.csv"), [
             ["01-04-2024", "", "B/F", 0, 0, 1000.00],
@@ -147,10 +146,10 @@ class TestImportBankStatements(unittest.TestCase):
         self.assertEqual(got, {"P1": "ACC1", "P2": "ACC2", "P3": "ACC1"})
 
     def test_carrier_csv_dd_mm_yyyy_dates(self):
-        # hand-authored carrier file with dd/mm/yyyy dates (like mamta_FY17-18)
+        # hand-authored carrier file with dd/mm/yyyy dates (like a legacy FY17-18 export)
         make_carrier_file(os.path.join(self.a_dir, "m.csv"), [
             ["a", "?", "19/01/2017", "", "PKT/BUY STUFF", 0, 500, 28798.44,
-             "expense", "Misc & small", "2016-17"],
+             "expense", "Misc_small", "2016-17"],
             ["a", "?", "01/02/2017", "", "ACH/WIPRO", 10, 0, 28808.44,
              "income", "", "2016-17"],
         ])
@@ -160,7 +159,7 @@ class TestImportBankStatements(unittest.TestCase):
         by_part = {r["particulars"]: r for r in rows}
         self.assertEqual(by_part["PKT/BUY STUFF"]["date"], "2017-01-19")
         self.assertEqual(by_part["PKT/BUY STUFF"]["fy"], "2016-17")
-        self.assertEqual(by_part["PKT/BUY STUFF"]["category"], "Misc & small")
+        self.assertEqual(by_part["PKT/BUY STUFF"]["category"], "Misc_small")
         self.assertEqual((by_part["ACH/WIPRO"]["kind"],
                           by_part["ACH/WIPRO"]["category"]), ("income", ""))
 
@@ -188,7 +187,7 @@ class TestExport(unittest.TestCase):
         self.backend.seed_members(MEMBERS)
         for owner in ("a", "b"):
             self.backend.upsert_bank_entry(
-                owner, account="A", date="2024-04-01", mode="", particulars=f"{owner}-pay",
+                owner, account="A", date="2024-04-01", particulars=f"{owner}-pay",
                 deposit=0, withdrawal=100, balance=900, kind="expense",
                 category="Groceries", file="s.csv")
 
@@ -209,7 +208,7 @@ class TestExport(unittest.TestCase):
             account=None, q=None), out)
         self.assertEqual(n, 1)
         first = out.getvalue().splitlines()[1].split(",")
-        self.assertEqual(first, ["a", "A", "01-04-2024", "", "a-pay",
+        self.assertEqual(first, ["a", "A", "01-04-2024", "a-pay",
                                  "0.00", "100.00", "900.00", "expense",
                                  "Groceries", "2024-25"])
         # --user selects that member, not the logged-in one
@@ -218,8 +217,9 @@ class TestExport(unittest.TestCase):
             user="b", type="bank", fy=None, kind=None, category=None,
             account=None, q=None), out)
         self.assertEqual(n, 1)
-        self.assertEqual(out.getvalue().splitlines()[1].split(",")[:5],
-                         ["b", "A", "01-04-2024", "", "b-pay"])
+        self.assertEqual(out.getvalue().splitlines()[1].split(",")[:4],
+                         ["b", "A", "01-04-2024", "b-pay"])
+        self.assertNotIn("MODE", out.getvalue().splitlines()[0])
 
 
 class TestBackupRestore(unittest.TestCase):
@@ -228,8 +228,7 @@ class TestBackupRestore(unittest.TestCase):
                 os.environ, {"FINANCE_DB": os.path.join(d, "db.sqlite")}):
             b1 = FinanceBackend(path=os.path.join(d, "db.sqlite"))
             b1.seed_members([{"name": "a", "data_dir": "data/a"}])
-            b1.upsert_bank_entry("a", account="A", date="2024-04-01", mode="",
-                                 particulars="P", deposit=0, withdrawal=1,
+            b1.upsert_bank_entry("a", account="A", date="2024-04-01", particulars="P", deposit=0, withdrawal=1,
                                  balance=9, kind="expense", category="X",
                                  file="f")
             dest = os.path.join(d, "backups")
@@ -271,8 +270,8 @@ class TestCliGate(unittest.TestCase):
             with mock.patch("impex.sys.stdin", new=io.StringIO("WRONG\n")):
                 with self.assertRaises(SystemExit):
                     impex.main(["import", "--user", "a", "--password-stdin"])
-            b = FinanceBackend()
-            self.assertEqual(b.entries(user_ids=["a"]), [])
+            with FinanceBackend() as b:
+                self.assertEqual(b.entries(user_ids=["a"]), [])
 
     def test_cli_set_password_bootstrap_then_import(self):
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
@@ -287,8 +286,8 @@ class TestCliGate(unittest.TestCase):
                  ["02-04-2024", "", "UPI/SM MART@okpay", 0, 100, 900.00]])
             with mock.patch("impex.sys.stdin", new=io.StringIO("pw\n")):
                 impex.main(["import", "--user", "a", "--password-stdin"])
-            b = FinanceBackend()
-            rows = b.entries(user_ids=["a"])
+            with FinanceBackend() as b:
+                rows = b.entries(user_ids=["a"])
             self.assertEqual(len(rows), 1)
             self.assertEqual((rows[0]["kind"], rows[0]["category"]), ("expense", "UNKNOWN"))
 

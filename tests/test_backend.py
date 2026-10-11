@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from backend.auth import new_token
 from backend.model import FinanceBackend
@@ -10,8 +11,22 @@ from backend.paths import db_path
 from backend.schema import MIGRATIONS
 
 
+_OPENED = []
+
+
 def make_backend(d):
-    return FinanceBackend(path=os.path.join(d, "networth.db"))
+    b = FinanceBackend(path=os.path.join(d, "networth.db"))
+    _OPENED.append(b)
+    return b
+
+
+def tearDownModule():
+    """Close every backend a test opened via make_backend (idempotent)."""
+    while _OPENED:
+        try:
+            _OPENED.pop().close()
+        except Exception:
+            pass
 
 
 class TestSchema(unittest.TestCase):
@@ -74,7 +89,11 @@ class TestSchema(unittest.TestCase):
             b.close()
 
     def test_db_path_defaults_to_var(self):
-        self.assertTrue(db_path().endswith("var/networth.db"))
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("backend.paths.BASE", d), \
+                mock.patch.dict(os.environ):
+            os.environ.pop("FINANCE_DB", None)
+            self.assertTrue(db_path().endswith("var/networth.db"))
 
 
 class TestMembersAndFy(unittest.TestCase):
@@ -149,21 +168,20 @@ class TestEntries(unittest.TestCase):
         self.d.cleanup()
 
     def test_create_update_skip(self):
-        kw = dict(account="A", date="2025-04-01", mode="UPI",
-                  particulars="UPI/someone@ok/x", deposit=0, withdrawal=100,
+        kw = dict(account="A", date="2025-04-01", particulars="UPI/someone@ok/x", deposit=0, withdrawal=100,
                   balance=900, file="t.csv")
         self.assertEqual(self.b.upsert_bank_entry(
             "a", kind="expense", category="Groceries", **kw), "created")
         self.assertEqual(self.b.upsert_bank_entry(
             "a", kind="expense", category="Groceries", **kw), "skipped")
         self.assertEqual(self.b.upsert_bank_entry(
-            "a", kind="expense", category="Transport & fuel", **kw), "updated")
+            "a", kind="expense", category="Transport_fuel", **kw), "updated")
         row = self.b.entries(user_ids=["a"], q="someone")[0]
-        self.assertEqual(row["category"], "Transport & fuel")
+        self.assertEqual(row["category"], "Transport_fuel")
         self.assertEqual(row["fy"], "2025-26")
 
     def test_manual_override_never_touched(self):
-        kw = dict(account="A", date="2025-04-02", mode="", particulars="P",
+        kw = dict(account="A", date="2025-04-02", particulars="P",
                   deposit=0, withdrawal=50, balance=100, file="t.csv")
         self.b.upsert_bank_entry("a", kind="expense", category="UNKNOWN", **kw)
         rid = self.b.entries(user_ids=["a"], category="UNKNOWN")[0]["id"]
@@ -175,7 +193,7 @@ class TestEntries(unittest.TestCase):
             self.b.entries(user_ids=["a"])[0]["category"], "UNKNOWN")
 
     def test_classify_unknown(self):
-        kw = dict(account="A", date="2025-05-01", mode="", particulars="W",
+        kw = dict(account="A", date="2025-05-01", particulars="W",
                   deposit=0, withdrawal=10, balance=50, file="t.csv")
         self.b.upsert_bank_entry("a", kind="review", category="UNKNOWN", **kw)
         rid = self.b.entries(user_ids=["a"])[0]["id"]
@@ -187,7 +205,7 @@ class TestEntries(unittest.TestCase):
             self.b.classify_unknown(999, "a", "expense", "X")
 
     def test_update_entry_partial_and_owner(self):
-        kw = dict(account="A", date="2025-05-02", mode="", particulars="W",
+        kw = dict(account="A", date="2025-05-02", particulars="W",
                   deposit=0, withdrawal=10, balance=50, file="t.csv")
         self.b.upsert_bank_entry("a", kind="expense", category="UNKNOWN", **kw)
         rid = self.b.entries(user_ids=["a"])[0]["id"]
@@ -219,10 +237,10 @@ class TestEntries(unittest.TestCase):
 
     def test_entry_filters(self):
         rows = [
-            dict(account="A", date="2025-04-03", mode="", particulars="UPI/x",
+            dict(account="A", date="2025-04-03", particulars="UPI/x",
                  deposit=0, withdrawal=10, balance=90, kind="expense",
                  category="Groceries"),
-            dict(account="B", date="2025-04-04", mode="NEFT", particulars="ACH/INC",
+            dict(account="B", date="2025-04-04", particulars="ACH/INC",
                  deposit=5000, withdrawal=0, balance=5090, kind="income",
                  category="Salary"),
         ]
@@ -307,9 +325,180 @@ class TestCategories(unittest.TestCase):
             self.b.create_category("   ", "expense")
         # importer path still creates implicitly
         self.assertEqual(self.b.get_or_create_category("Pet care", "expense"),
-                         "Pet care")
-        self.assertIn("Pet care", {c["label"] for c in self.b.categories()})
+                         "Pet_care")
+        self.assertIn("Pet_care", {c["label"] for c in self.b.categories()})
 
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestCleanupSemantics(unittest.TestCase):
+    """category aliases, credited transfer == income, migration v3."""
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.d.name, "n.db")
+        self.b = FinanceBackend(path=self.path)
+        self.b.seed_members([{"name": "a", "data_dir": "data/a"}])
+        self.kw = dict(account="A", balance=0, file="f")
+
+    def tearDown(self):
+        self.b.close()
+        self.d.cleanup()
+
+    def _row(self, particulars):
+        return self.b.con.execute(
+            "SELECT kind, category_id FROM entries WHERE particulars = ?",
+            (particulars,)).fetchone()
+
+    def test_credited_transfer_becomes_income(self):
+        self.b.upsert_bank_entry("a", date="2024-05-01", particulars="T1",
+                                 deposit=500, withdrawal=0, kind="transfer",
+                                 category="UNKNOWN", **self.kw)
+        self.assertEqual(tuple(self._row("T1")), ("income", ""))
+
+    def test_debit_transfer_stays_transfer(self):
+        self.b.upsert_bank_entry("a", date="2024-05-01", particulars="T2",
+                                 deposit=0, withdrawal=500, kind="transfer",
+                                 category="", **self.kw)
+        self.assertEqual(self._row("T2")["kind"], "transfer")
+
+    def test_dashboard_edit_credit_to_transfer_is_income(self):
+        self.b.upsert_bank_entry("a", date="2024-05-01", particulars="T3",
+                                 deposit=500, withdrawal=0, kind="expense",
+                                 category="Misc_small", **self.kw)
+        eid = self.b.con.execute("SELECT id FROM entries").fetchone()[0]
+        self.b.update_entry(eid, "a", kind="transfer")
+        self.assertEqual(tuple(self._row("T3")), ("income", ""))
+
+    def test_category_aliases_merge(self):
+        for i, lbl in enumerate(("Loan & EMO", "Bank & DP Charges", "nan")):
+            self.b.upsert_bank_entry("a", date="2024-05-0%d" % (i + 1),
+                                     particulars=f"A{i}", deposit=0,
+                                     withdrawal=10, kind="expense",
+                                     category=lbl, **self.kw)
+        labels = {r["label"] for r in self.b.categories()}
+        self.assertTrue({"Loan_EMI", "Bank_DP_charges",
+                         "Shopping_goods"} <= labels)
+        self.assertFalse(labels & {"Loan & EMO", "Bank & DP Charges", "nan"})
+
+    def test_migration_v3_cleans_legacy_rows(self):
+        import sqlite3
+        con = sqlite3.connect(self.path)
+        con.execute("PRAGMA user_version = 2")
+        con.executescript("""
+        INSERT OR IGNORE INTO categories VALUES ('Loan & EMO','Loan & EMO','expense'),
+          ('nan','nan','refund'),('UNKNOWN','UNKNOWN','review');
+        INSERT INTO entries (user_id,category_id,kind,fy,date,particulars,
+          deposit,withdrawal,nkey) VALUES
+          ('a','Loan & EMO','expense','2024-25','2024-05-01','L',0,5,'k1'),
+          ('a','nan','refund','2024-25','2024-05-02','R',9,0,'k2'),
+          ('a','UNKNOWN','transfer','2024-25','2024-05-03','CT',7,0,'k3'),
+          ('a','UNKNOWN','transfer','2024-25','2024-05-04','DT',0,7,'k4');""")
+        con.commit(); con.close()
+        self.b.close()
+        self.b = FinanceBackend(path=self.path)
+        got = {r["particulars"]: (r["kind"], r["category_id"])
+               for r in self.b.con.execute("SELECT * FROM entries")}
+        self.assertEqual(got["L"], ("expense", "Loan_EMI"))
+        self.assertEqual(got["R"], ("refund", "Shopping_goods"))
+        self.assertEqual(got["CT"], ("income", ""))
+        self.assertEqual(got["DT"], ("transfer", "Transfer"))  # v8
+        self.assertNotIn("nan", {r["id"] for r in self.b.categories()})
+        self.b.close()
+        self.b = FinanceBackend(path=self.path)  # idempotent re-run
+
+
+class TestCategoryUnderscores(unittest.TestCase):
+    """category labels never contain whitespace."""
+
+    def test_canon_category(self):
+        from backend.model import canon_category
+        self.assertEqual(canon_category("  Home &  maintenance "), "Home_maintenance")
+        self.assertEqual(canon_category("Groceries"), "Groceries")
+        self.assertEqual(canon_category("Loan & EMO"), "Loan_EMI")
+        self.assertEqual(canon_category(""), "")
+        self.assertEqual(canon_category(None), "")
+
+    def test_all_write_paths_store_underscores(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            b = FinanceBackend(path=os.path.join(d, "n.db"))
+            b.seed_members([{"name": "a", "data_dir": "data/a"}])
+            b.upsert_bank_entry("a", account="A", date="2024-05-01", particulars="P", deposit=0, withdrawal=5,
+                                balance=0, kind="expense",
+                                category="Dining out", file="f")
+            self.assertEqual(b.create_category("Pet care", "expense"), "created")
+            self.assertEqual(b.create_category("Pet  care", "expense"), "exists")
+            rid = b.entries()[0]["id"]
+            b.update_entry(rid, "a", category="Kids & school")
+            labels = {c["label"] for c in b.categories()}
+            self.assertTrue({"Pet_care", "Kids_school"} <= labels)
+            self.assertFalse([l for l in labels if " " in l])
+            b.close()
+
+    def test_migration_v4_renames_legacy_rows_idempotently(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "n.db")
+            b = FinanceBackend(path=path)
+            b.seed_members([{"name": "a", "data_dir": "data/a"}])
+            b.close()
+            con = sqlite3.connect(path)
+            con.execute("PRAGMA user_version = 3")
+            con.executescript("""
+            INSERT OR IGNORE INTO categories VALUES ('Dining out','Dining out','expense'),
+                                          ('Groceries','Groceries','expense');
+            INSERT INTO entries (user_id,category_id,kind,fy,date,particulars,
+              deposit,withdrawal,nkey) VALUES
+              ('a','Dining out','expense','2024-25','2024-05-01','D',0,5,'k1'),
+              ('a','Groceries','expense','2024-25','2024-05-02','G',0,5,'k2');""")
+            con.commit(); con.close()
+            for _ in range(2):  # second open proves idempotence
+                b = FinanceBackend(path=path)
+                got = {r["particulars"]: r["category_id"] for r in
+                       b.con.execute("SELECT * FROM entries")}
+                self.assertEqual(got, {"D": "Dining_out", "G": "Groceries"})
+                self.assertFalse([c for c in b.categories() if " " in c["label"]])
+                b.close()
+
+
+class TestCategoryNoAmpersand(unittest.TestCase):
+    """no '&' either; labels are [A-Za-z0-9_] words joined by '_'."""
+
+    def test_canon_drops_ampersand(self):
+        from backend.model import canon_category
+        for raw, want in [("Loan & EMI", "Loan_EMI"), ("Loan_&_EMI", "Loan_EMI"),
+                          ("Fitness&Sports", "Fitness_Sports"),
+                          ("Home &  maintenance", "Home_maintenance"),
+                          ("Bank & DP Charges", "Bank_DP_charges"),
+                          ("Pet_care", "Pet_care"), ("a & & b", "a_b")]:
+            self.assertEqual(canon_category(raw), want, raw)
+
+    def test_migration_v5_renames_legacy_rows_idempotently(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "n.db")
+            b = FinanceBackend(path=path)
+            b.seed_members([{"name": "a", "data_dir": "data/a"}])
+            b.close()
+            con = sqlite3.connect(path)
+            con.execute("PRAGMA user_version = 4")
+            con.executescript("""
+            INSERT OR IGNORE INTO categories VALUES ('Loan_&_EMI','Loan_&_EMI','expense'),
+                                          ('Dining_out','Dining_out','expense');
+            INSERT INTO entries (user_id,category_id,kind,fy,date,particulars,
+              deposit,withdrawal,nkey) VALUES
+              ('a','Loan_&_EMI','expense','2024-25','2024-05-01','L',0,5,'k1'),
+              ('a','Dining_out','expense','2024-25','2024-05-02','D',0,5,'k2');""")
+            con.commit(); con.close()
+            for _ in range(2):
+                b = FinanceBackend(path=path)
+                got = {r["particulars"]: r["category_id"] for r in
+                       b.con.execute("SELECT * FROM entries")}
+                self.assertEqual(got, {"L": "Loan_EMI", "D": "Dining_out"})
+                self.assertFalse([c for c in b.categories() if "&" in c["label"]])
+                b.close()

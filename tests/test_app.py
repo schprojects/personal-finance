@@ -1,6 +1,6 @@
 """Headless smoke test for the streamlit dashboard (AppTest).
 
-Runs all five pages against a small temp database with a logged-in user, and
+Runs every page against a small temp database with a logged-in user, and
 exercises the login page (no user in state). JS/cookie probing cannot run
 headlessly, so the authenticated runs pre-set st.session_state.user.
 """
@@ -15,6 +15,7 @@ from unittest import mock
 from streamlit.testing.v1 import AppTest
 
 from backend import FinanceBackend
+from helpers import session_token
 
 
 APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
@@ -37,16 +38,13 @@ def make_db(path):
                     {"name": "b", "data_dir": "data/b"}])
     b.set_password("a", "pw")
     with b.con:
-        b.upsert_bank_entry("a", account="A", date="2024-04-01", mode="UPI",
-                            particulars="UPI/SM MART@okpay", deposit=0,
+        b.upsert_bank_entry("a", account="A", date="2024-04-01", particulars="UPI/SM MART@okpay", deposit=0,
                             withdrawal=100, balance=900, kind="expense",
                             category="Groceries", file="s")
-        b.upsert_bank_entry("a", account="A", date="2024-04-02", mode="",
-                            particulars="RANDOM UNKNOWN PAYEE", deposit=0,
+        b.upsert_bank_entry("a", account="A", date="2024-04-02", particulars="RANDOM UNKNOWN PAYEE", deposit=0,
                             withdrawal=50, balance=850, kind="review",
                             category="UNKNOWN", file="s")
-        b.upsert_bank_entry("b", account="B", date="2024-04-01", mode="NEFT",
-                            particulars="ACH/INCOME", deposit=250, withdrawal=0,
+        b.upsert_bank_entry("b", account="B", date="2024-04-01", particulars="ACH/INCOME", deposit=250, withdrawal=0,
                             balance=1500, kind="income", category="", file="s")
         b.upsert_investment("a", type_="MF", label="Axis Cap Fund",
                             folio="1", units=100, latest_date="2024-04-01",
@@ -66,8 +64,7 @@ def make_zero_db(path):
     b.seed_members([{"name": "a", "data_dir": "data/a"}])
     b.set_password("a", "pw")
     with b.con:
-        b.upsert_bank_entry("a", account="A", date="2024-04-01", mode="NEFT",
-                            particulars="ACH/SALARY", deposit=1000, withdrawal=0,
+        b.upsert_bank_entry("a", account="A", date="2024-04-01", particulars="ACH/SALARY", deposit=1000, withdrawal=0,
                             balance=1000, kind="income", category="", file="s")
     b.close()
 
@@ -84,7 +81,7 @@ class TestDashboardPages(unittest.TestCase):
     def _at(self):
         at = AppTest.from_file(APP)
         at.session_state["user"] = dict(USER_A)
-        at.session_state["token"] = FinanceBackend(path=self.db).issue_session("a", "pw")
+        at.session_state["token"] = session_token(self.db, "a", "pw")
         return at
 
     def test_all_pages_render(self):
@@ -92,7 +89,8 @@ class TestDashboardPages(unittest.TestCase):
             at = self._at()
             at.run()
             self.assertFalse(at.exception)
-            for page in ("Transactions", "Categories", "Review", "Holdings"):
+            for page in ("Home", "Overview", "Transactions", "Categories",
+                         "Holdings", "Import", "Export"):
                 at.radio(key="page").set_value(page)
                 at.run()
                 self.assertFalse(at.exception, f"{page} raised")
@@ -155,18 +153,44 @@ class TestDashboardPages(unittest.TestCase):
             self.assertTrue(any("Username" in i for i in inputs))
             self.assertTrue(any("Password" in i for i in inputs))
 
-    def test_classify_and_update_write_to_db(self):
-        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}), \
-                tempfile.TemporaryDirectory() as _:
+    def test_transactions_render_never_writes(self):
+        """Viewing / filtering Transactions never changes the database."""
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
             at = self._at()
             at.run()
-            at.radio(key="page").set_value("Review")
+            at.radio(key="page").set_value("Transactions")
+            at.radio(key="scope").set_value("Me")
             at.run()
             self.assertFalse(at.exception)
             b = FinanceBackend(path=self.db)
             unk = [r for r in b.entries(user_ids=["a"]) if r["kind"] == "review"]
             self.assertEqual(len(unk), 1)
             b.close()
+
+    def test_text_and_sql_filter_together_raise_an_error(self):
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
+            at = self._at()
+            at.run()
+            at.radio(key="page").set_value("Transactions")
+            at.run()
+            at.text_input(key="tx_text").set_value("MART")
+            at.text_input(key="tx_sql").set_value("where kind = 'expense'")
+            at.run()
+            self.assertFalse(at.exception)
+            self.assertTrue(any("not both" in e.value for e in at.error))
+
+    def test_sql_filter_selects_rows(self):
+        with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
+            at = self._at()
+            at.run()
+            at.radio(key="page").set_value("Transactions")
+            at.run()
+            at.text_input(key="tx_sql").set_value(
+                "select * where kind is empty and category is empty "
+                "and particulars like '%random%'")
+            at.run()
+            self.assertFalse(at.exception)
+            self.assertIn("1 rows", " ".join(c.value for c in at.caption))
 
     def test_sign_out_preserves_data(self):
         with mock.patch.dict(os.environ, {"FINANCE_DB": self.db}):
@@ -197,78 +221,6 @@ class TestEditHelpers(unittest.TestCase):
 
     def tearDown(self):
         self.d.cleanup()
-
-    def test_entry_disabled_direction(self):
-        """Whole grid locked read-only (family); Kind/Category editable in Me."""
-        pf = pf_module()
-        cols = ["Date", "Member", "Mode", "Kind", "Category", "Particulars",
-                "Debit", "Credit"]
-        locked = pf._entry_disabled(cols, editable=True)
-        self.assertIsInstance(locked, list)
-        self.assertNotIn("Kind", locked)
-        self.assertNotIn("Category", locked)
-        self.assertIn("Date", locked)
-        self.assertEqual(len(locked), len(cols) - 2)
-        self.assertIs(pf._entry_disabled(cols, editable=False), True)
-
-    def test_entry_edits_commit_and_ownership(self):
-        pf = pf_module()
-        b = FinanceBackend(path=self.db)
-        try:
-            rows = b.entries(user_ids=["a"])  # date order: expense, then review
-            rowmap = [(r["id"], r["user_id"]) for r in rows]
-            self.assertEqual(rows[1]["kind"], "review")
-            # only the cells actually edited are written (kind kept)
-            applied, errors = pf.commit_entry_edits(
-                b, "a", rowmap, {1: {"Category": "Groceries"}})
-            self.assertEqual((applied, errors), (1, []))
-            row = b.entries(user_ids=["a"])[1]
-            self.assertEqual((row["kind"], row["category"]),
-                             ("review", "Groceries"))
-            applied, errors = pf.commit_entry_edits(
-                b, "a", rowmap, {1: {"Kind": "expense"}})
-            self.assertEqual((applied, errors), (1, []))
-            changed = b.entries(user_ids=["a"], kinds=["expense"])
-            self.assertEqual(len(changed), 2)  # original + reclassified review
-            # non-owner attempts are refused
-            applied, errors = pf.commit_entry_edits(
-                b, "b", rowmap, {0: {"Category": "Other"}})
-            self.assertEqual((applied, len(errors)), (0, 1))
-            # out-of-range position is reported, not raised
-            applied, errors = pf.commit_entry_edits(b, "a", rowmap, {99: {}})
-            self.assertEqual((applied, len(errors)), (0, 1))
-        finally:
-            b.close()
-
-    def test_bulk_apply_edits_commit_and_ownership(self):
-        pf = pf_module()
-        b = FinanceBackend(path=self.db)
-        try:
-            rows = b.entries(user_ids=["a", "b"])
-            rowmap = [(r["id"], r["user_id"]) for r in rows]
-            mine = sum(1 for _, o in rowmap if o == "a")
-            self.assertEqual((mine, len(rowmap)), (2, 3))
-            applied, errors = pf.bulk_apply_edits(
-                b, "a", rowmap, kind="expense", category="Bulk")
-            self.assertEqual(applied, 2)
-            self.assertEqual(len(errors), 1)  # b's row refused, not raised
-            for r in b.entries(user_ids=["a"]):
-                self.assertEqual((r["kind"], r["category"]),
-                                 ("expense", "Bulk"))
-            # b's row untouched
-            rb = b.entries(user_ids=["b"])[0]
-            self.assertEqual(rb["kind"], "income")
-            # a subset rowmap (selection) changes only that subset
-            before = b.entries(user_ids=["a"])
-            applied, errors = pf.bulk_apply_edits(
-                b, "a", [(r["id"], "a") for r in before[:1]],
-                kind=None, category="Picked")
-            self.assertEqual((applied, errors), (1, []))
-            rows = b.entries(user_ids=["a"])
-            self.assertEqual(rows[0]["category"], "Picked")
-            self.assertEqual(rows[1]["category"], "Bulk")
-        finally:
-            b.close()
 
     def test_investment_edits_commit_and_reject_identity(self):
         pf = pf_module()
@@ -310,6 +262,101 @@ class TestEditHelpers(unittest.TestCase):
             b.close()
 
 
+class TestStagedEdits(unittest.TestCase):
+    """edits stay in session state until the explicit batched Save."""
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.d.name, "networth.db")
+        make_db(self.db)
+        self.pf = pf_module()
+        self.b = FinanceBackend(path=self.db)
+        self.rows = self.b.entries(user_ids=["a"])
+        self.ids = [r["id"] for r in self.rows]
+        self.base = {r["id"]: {"kind": r["kind"], "category": r["category"]}
+                     for r in self.rows}
+
+    def tearDown(self):
+        self.b.close()
+        self.d.cleanup()
+
+    def test_multi_row_cell_edits_all_retained_and_nothing_written(self):
+        staged, sel = {}, set()
+        n = self.pf.merge_cell_edits(
+            staged, sel, self.ids,
+            {0: {"Category": "Dining_out"},
+             1: {"Kind": "expense", "Category": "Groceries"}}, self.base)
+        self.assertEqual(n, 3)
+        self.assertEqual(staged[self.ids[0]], {"category": "Dining_out"})
+        self.assertEqual(staged[self.ids[1]],
+                         {"kind": "expense", "category": "Groceries"})
+        # database untouched until Save
+        self.assertEqual([r["category"] for r in self.b.entries(user_ids=["a"])],
+                         ["Groceries", "UNKNOWN"])
+
+    def test_reverting_an_edit_leaves_nothing_pending(self):
+        staged = {}
+        self.pf.merge_cell_edits(staged, set(), self.ids,
+                                 {0: {"Category": "Dining_out"}}, self.base)
+        self.pf.merge_cell_edits(staged, set(), self.ids,
+                                 {0: {"Category": "Groceries"}}, self.base)
+        self.assertEqual(self.pf.staged_changes(staged), {})
+
+    def test_select_column_updates_selection_only(self):
+        staged, sel = {}, set()
+        self.pf.merge_cell_edits(staged, sel, self.ids,
+                                 {0: {"Select": True}, 1: {"Select": True}}, self.base)
+        self.assertEqual(sel, set(self.ids))
+        self.assertEqual(staged, {})
+        self.pf.merge_cell_edits(staged, sel, self.ids,
+                                 {0: {"Select": False}}, self.base)
+        self.assertEqual(sel, {self.ids[1]})
+
+    def test_bad_position_is_ignored(self):
+        staged = {}
+        self.assertEqual(self.pf.merge_cell_edits(
+            staged, set(), self.ids, {99: {"Kind": "expense"}}, self.base), 0)
+
+    def test_stage_bulk_then_save_is_one_batch(self):
+        staged = {}
+        self.pf.stage_bulk(staged, self.ids, self.base, kind="expense",
+                           category="Dining_out")
+        changes = self.pf.staged_changes(staged)
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(self.b.bulk_update_entries("a", changes), 2)
+        for r in self.b.entries(user_ids=["a"]):
+            self.assertEqual((r["kind"], r["category"]),
+                             ("expense", "Dining_out"))
+
+    def test_bulk_save_is_atomic_and_owner_only(self):
+        other = self.b.entries(user_ids=["b"])[0]["id"]
+        with self.assertRaises(ValueError):
+            self.b.bulk_update_entries(
+                "a", {self.ids[0]: (None, "Dining_out"), other: (None, "x")})
+        self.assertEqual(self.b.entries(user_ids=["a"])[0]["category"], "Groceries")
+
+    def test_on_tx_edited_uses_session_state_only(self):
+        session = {"ed_tx_0": {"edited_rows": {0: {"Category": "Dining_out"}}}}
+        st = mock.MagicMock()
+        st.session_state = session
+        with mock.patch.object(self.pf, "st", st):
+            self.pf.on_tx_edited("ed_tx_0", self.ids, self.base)
+        self.assertEqual(session["staged"], {self.ids[0]: {"category": "Dining_out"}})
+        self.assertEqual(session["ed_ver"], 1)
+        self.assertEqual(self.b.entries(user_ids=["a"])[0]["category"], "Groceries")
+
+    def test_rows_stay_visible_after_edit(self):
+        """stable_ids freezes the row set while the filter is unchanged."""
+        session = {}
+        st = mock.MagicMock()
+        st.session_state = session
+        with mock.patch.object(self.pf, "st", st):
+            first = self.pf.stable_ids("tx", ("sig",), lambda: [1, 2])
+            again = self.pf.stable_ids("tx", ("sig",), lambda: [])
+            changed = self.pf.stable_ids("tx", ("other",), lambda: [3])
+        self.assertEqual((first, again, changed), ([1, 2], [1, 2], [3]))
+
+
 class TestEditCallbacks(unittest.TestCase):
     """Streamlit never wires data_editor deltas through AppTest, so the on_change
     handlers are driven directly against a fake `st`: scope guard, session-key
@@ -337,84 +384,6 @@ class TestEditCallbacks(unittest.TestCase):
         with mock.patch.object(self.pf, "st", st):
             handler(self.b, key, *extra)
         return st
-
-    def test_entry_callback_persists_kind_and_category(self):
-        self.session["ed_entries"] = {
-            "edited_rows": {1: {"Kind": "expense", "Category": "Groceries"}}}
-        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap)
-        self.assertEqual(self.b.entries(user_ids=["a"])[1]["kind"], "expense")
-        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"],
-                         "Groceries")
-        st.success.assert_called_once()
-        st.warning.assert_not_called()
-        st.rerun.assert_called_once()
-
-    def test_entry_callback_family_scope_writes_nothing(self):
-        self.session["scope"] = "Family"
-        self.session["ed_entries"] = {
-            "edited_rows": {1: {"Category": "Groceries"}}}
-        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap)
-        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"], "UNKNOWN")
-        st.success.assert_not_called()
-        st.warning.assert_not_called()
-        st.rerun.assert_not_called()
-
-    def test_entry_callback_non_owner_row_is_refused(self):
-        self.session["ed_entries"] = {
-            "edited_rows": {0: {"Category": "Groceries"}}}
-        foreign = [(i, "b") for i, _ in self.rowmap]
-        before = self.b.entries(user_ids=["a"])[0]["category"]
-        st = self._call(self.pf.on_entry_edited, "ed_entries", foreign)
-        self.assertEqual(self.b.entries(user_ids=["a"])[0]["category"], before)
-        st.success.assert_not_called()
-        st.warning.assert_called_once()
-        st.rerun.assert_called_once()
-
-    def test_selection_checkboxes_are_tracked_not_committed(self):
-        """Select column toggles update the session-state set and never touch
-        the DB (the Select delta must not be passed to commit_entry_edits)."""
-        self.session["ed_entries"] = {
-            "edited_rows": {0: {"Select": True}, 1: {"Select": True}}}
-        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap,
-                        "bulk_tx_sel")
-        self.assertEqual(self.session["bulk_tx_sel"], {r[0] for r in self.rowmap})
-        st.success.assert_not_called()
-        st.warning.assert_not_called()
-        st.rerun.assert_called_once()  # re-render shows the ticks
-        # a real cell edit on the same table still commits
-        self.session["ed_entries"] = {
-            "edited_rows": {0: {"Select": True}, 1: {"Category": "Groceries"}}}
-        st = self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap,
-                        "bulk_tx_sel")
-        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"],
-                         "Groceries")
-        st.success.assert_called_once()
-        # toggling off removes the row from the selection
-        self.session["ed_entries"] = {
-            "edited_rows": {0: {"Select": False}}}
-        self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap,
-                   "bulk_tx_sel")
-        self.assertEqual(self.session["bulk_tx_sel"],
-                         {self.rowmap[1][0]})
-
-    def test_entry_callback_runs_off_the_script_thread(self):
-        """Regression for the real failure: streamlit calls on_change on another
-        thread, so the shared backend.con must never be handed to the commit.
-        Driving the whole handler from a worker thread must succeed."""
-        self.session["ed_entries"] = {
-            "edited_rows": {1: {"Category": "Groceries"}}}
-        failures = []
-        def worker():
-            try:
-                self._call(self.pf.on_entry_edited, "ed_entries", self.rowmap)
-            except Exception as e:  # noqa: BLE001 - captured, asserted below
-                failures.append(e)
-        t = threading.Thread(target=worker)
-        t.start()
-        t.join()
-        self.assertEqual(failures, [])
-        self.assertEqual(self.b.entries(user_ids=["a"])[1]["category"],
-                         "Groceries")
 
     def test_investment_callback_persists_editable_fields(self):
         invs = self.b.investments(user_ids=["a"])

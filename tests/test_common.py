@@ -1,6 +1,8 @@
 """Unit tests for common.py (helpers shared by classifier and app)."""
 import os
+import tempfile
 import unittest
+from unittest import mock
 
 from finance.common import fy_of, fy_of_str, inr, money, payee_key, load_members
 
@@ -42,11 +44,18 @@ class TestPayeeKey(unittest.TestCase):
 
 
 class TestMembers(unittest.TestCase):
-    def test_loads_all_real_members(self):
-        members = load_members()
-        self.assertGreaterEqual(len(members), 1)
-        for m in members:
-            self.assertTrue(os.path.isdir(m["data_dir"]))
+    def test_loads_members_from_synthetic_configuration(self):
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "members.yaml"), "w") as file:
+                file.write("members:\n"
+                           "  - name: ' Alex '\n    data_dir: data/alex\n"
+                           "  - name: Blair\n    data_dir: data/blair\n")
+            with mock.patch("finance.common.BASE", root):
+                members = load_members()
+            self.assertEqual(members, [
+                {"name": "alex", "data_dir": os.path.join(root, "data/alex")},
+                {"name": "blair", "data_dir": os.path.join(root, "data/blair")},
+            ])
 
 
 if __name__ == "__main__":
