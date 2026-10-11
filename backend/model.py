@@ -6,12 +6,50 @@ changed only by its owner; anyone in the family may read everything.
 """
 import datetime as dt
 import hashlib
+import re
 
 from . import auth, db, schema
 from .paths import db_path
 
 UNKNOWN = "UNKNOWN"
 FAMILY_ID = "f1"
+
+# Misspelt / case-duplicate / artefact labels -> canonical label.
+# Keys are already in canonical form (see canon_category).
+CATEGORY_ALIASES = {"Loan_EMO": "Loan_EMI",
+                    "Bank_DP_Charges": "Bank_DP_charges",
+                    "nan": "Shopping_goods"}
+
+
+def canon_category(label):
+    """Canonical category label: trimmed; every run of
+    whitespace and/or `&` becomes a single `_`; known misspellings folded.
+    Blank stays blank."""
+    label = re.sub(r"[\s&_]*[\s&][\s&_]*", "_", (label or "").strip())
+    return CATEGORY_ALIASES.get(label.strip("_"), label.strip("_"))
+
+
+TRANSFER = "Transfer"
+
+
+def default_category(kind):
+    """The category an entry takes when none is given: income has only the
+    default (blank) category, a transfer is `Transfer`, the rest are UNKNOWN."""
+    return "" if kind == "income" else TRANSFER if kind == "transfer" else UNKNOWN
+
+
+def settle_kind(kind, category, deposit, withdrawal):
+    """One semantic for credited transfers: a credit-only
+    `transfer` is simply `income` (default category). Income always lands on
+    the default category. A debited transfer is spend and, without a
+    real category, takes the default `Transfer`."""
+    if kind == "transfer" and (deposit or 0) > 0 and not (withdrawal or 0):
+        kind = "income"
+    if kind == "income":
+        category = ""
+    elif kind == "transfer" and category in ("", UNKNOWN, None):
+        category = TRANSFER
+    return kind, category
 
 
 def nkey(account, date, particulars, deposit, withdrawal):
@@ -28,6 +66,12 @@ class FinanceBackend:
 
     def close(self):
         self.con.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     # -- users / family ----------------------------------------------------
     def seed_members(self, members):
@@ -50,6 +94,11 @@ class FinanceBackend:
             "SELECT id, username, display_name, family_id,"
             " (password_hash IS NOT NULL) AS has_password"
             " FROM users ORDER BY username")
+
+    def data_dir(self, user_id):
+        """The member's data folder (from members.yaml), '' if unknown."""
+        r = db.one(self.con, "SELECT data_dir FROM users WHERE id = ?", (user_id,))
+        return r["data_dir"] if r else ""
 
     def family_user_ids(self, user_id):
         u = db.one(self.con, "SELECT family_id FROM users WHERE id = ?", (user_id,))
@@ -151,7 +200,7 @@ class FinanceBackend:
                        "SELECT * FROM categories ORDER BY kind, label")
 
     def get_or_create_category(self, label, kind):
-        label = (label or "").strip()
+        label = canon_category(label)
         if not label and kind in ("expense", "review"):
             label = UNKNOWN
         self.con.execute(
@@ -161,7 +210,7 @@ class FinanceBackend:
 
     def create_category(self, label, kind):
         """Dashboard create: blank labels rejected; returns 'created'|'exists'."""
-        label = (label or "").strip()
+        label = canon_category(label)
         if not label:
             raise ValueError("category label must not be blank")
         existing = db.one(self.con,
@@ -174,13 +223,30 @@ class FinanceBackend:
         self.con.commit()
         return "created"
 
+    # -- kinds --------------------------------------------------
+    def kinds(self):
+        return [r["name"] for r in db.rows(
+            self.con, "SELECT name FROM kinds ORDER BY rowid")]
+
+    def create_kind(self, name):
+        """Dashboard create: lower-case single token; 'created'|'exists'."""
+        name = re.sub(r"\s+", "_", (name or "").strip().lower())
+        if not name:
+            raise ValueError("kind must not be blank")
+        if name in self.kinds():
+            return "exists"
+        self.con.execute("INSERT INTO kinds (name) VALUES (?)", (name,))
+        self.con.commit()
+        return "created"
+
     # -- entries -----------------------------------------------------------
-    def upsert_bank_entry(self, user_id, *, account, date, mode, particulars,
+    def upsert_bank_entry(self, user_id, *, account, date, particulars,
                           deposit, withdrawal, balance, kind, category, file=""):
         """Importer path: create / update / skip by natural key. manual_override
         rows are never touched. Returns one of the four actions."""
         dep, wd = float(deposit or 0), float(withdrawal or 0)
         key = nkey(account, date, particulars, dep, wd)
+        kind, category = settle_kind(kind, category, dep, wd)
         category_id = self.get_or_create_category(category, kind)
         existing = db.one(self.con,
                           "SELECT * FROM entries WHERE user_id = ? AND nkey = ?",
@@ -188,10 +254,10 @@ class FinanceBackend:
         if existing is None:
             self.con.execute(
                 "INSERT INTO entries (user_id, category_id, kind, fy, account, date,"
-                " mode, particulars, deposit, withdrawal, balance, manual_override,"
+                " particulars, deposit, withdrawal, balance, manual_override,"
                 " nkey, file, edited_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)",
-                (user_id, category_id, kind, self.fy_of(date), account, date, mode,
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)",
+                (user_id, category_id, kind, self.fy_of(date), account, date,
                  particulars, dep, wd, balance, key, file))
             self.con.commit()
             return "created"
@@ -214,7 +280,7 @@ class FinanceBackend:
                       (user_id, key)) is not None
 
     def entries(self, *, user_ids=None, kinds=None, category=None, fy=None,
-                date_from=None, date_to=None, account=None, mode=None, q=None,
+                date_from=None, date_to=None, account=None, q=None,
                 limit=None):
         sql = ("SELECT e.*, c.label AS category FROM entries e"
                " JOIN categories c ON c.id = e.category_id")
@@ -230,11 +296,11 @@ class FinanceBackend:
         if category:
             conds.append("c.label = ?"); params.append(category)
         if fy:
-            conds.append("e.fy = ?"); params.append(fy)
+            fys = [fy] if isinstance(fy, str) else list(fy)
+            conds.append(f"e.fy IN ({','.join('?' * len(fys))})")
+            params += fys
         if account:
             conds.append("e.account = ?"); params.append(account)
-        if mode:
-            conds.append("e.mode = ?"); params.append(mode)
         if q:
             conds.append("e.particulars LIKE ?"); params.append(f"%{q}%")
         if date_from:
@@ -248,37 +314,61 @@ class FinanceBackend:
             sql += f" LIMIT {int(limit)}"
         return db.rows(self.con, sql, params)
 
-    def update_entry(self, entry_id, user_id, kind=None, category=None):
+    def update_entry(self, entry_id, user_id, kind=None, category=None,
+                     commit=True):
         """Dashboard edit: set a row's kind and/or category (owner only)."""
         row = db.one(self.con, "SELECT * FROM entries WHERE id = ?", (entry_id,))
         if not row:
             raise ValueError("entry not found")
         if row["user_id"] != user_id:
             raise ValueError("not the owner of this entry")
-        if kind is not None and kind not in ("expense", "income", "investment",
-                                             "transfer", "reimbursed",
-                                             "refund", "credit", "review"):
+        if kind is not None and kind not in self.kinds():
             raise ValueError(f"unsupported kind: {kind}")
         category = (category or "").strip()
         if kind is None and not category:
             raise ValueError("provide a kind and/or category")
-        if category:
-            category_id = self.get_or_create_category(category,
-                                                      kind or row["kind"])
-        else:
-            category_id = row["category_id"]
+        if kind is not None:
+            kind, category = settle_kind(kind, category, row["deposit"],
+                                         row["withdrawal"])
+        effective = kind if kind is not None else row["kind"]
+        new_category_id = None  # None = leave the category as it is
+        if effective == "income":
+            # An income entry only ever carries the default category, whatever
+            # the edit asked for (backend-specs.md).
+            new_category_id = self.get_or_create_category("", "income")
+        elif category:
+            new_category_id = self.get_or_create_category(category, effective)
+        elif not row["category_id"]:
+            # income -> expense/refund/... without a category: the kind's default
+            new_category_id = self.get_or_create_category(
+                default_category(effective), effective)
         # Dashboard edits are authoritative: manual_override=1 freezes the row
         # against future re-imports (upsert_bank_entry returns manual_override).
         sets, params = ["edited_at = ?", "manual_override = 1"], \
             [auth.now_utc().isoformat()]
         if kind is not None:
             sets.append("kind = ?"); params.append(kind)
-        if category:
-            sets.append("category_id = ?"); params.append(category_id)
+        if new_category_id is not None:
+            sets.append("category_id = ?"); params.append(new_category_id)
         params.append(entry_id)
         self.con.execute(
             f"UPDATE entries SET {', '.join(sets)} WHERE id = ?", params)
+        if commit:
+            self.con.commit()
+
+    def bulk_update_entries(self, user_id, changes):
+        """Explicit batched save: `changes` maps entry id ->
+        (kind or None, category or None). All-or-nothing: any invalid row rolls
+        the whole batch back. Returns the number of rows changed."""
+        try:
+            for entry_id, (kind, category) in changes.items():
+                self.update_entry(entry_id, user_id, kind=kind or None,
+                                  category=category, commit=False)
+        except Exception:
+            self.con.rollback()
+            raise
         self.con.commit()
+        return len(changes)
 
     def classify_unknown(self, entry_id, user_id, kind, category):
         """Dashboard edit: give an UNKNOWN row a real kind + category."""

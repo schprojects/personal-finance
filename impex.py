@@ -36,12 +36,12 @@ from backend.model import nkey
 from backend.paths import db_path
 from finance.classify import parse_blocks, reconcile
 from finance.common import load_members, money, statements_for
+from finance.exporting import EXPORT_COLS, write_entries
+from finance.importing import commit_rows, resolve
 from finance.holdings import is_mf_sheet, parse_label_rows, parse_mf_sheet
 
-FAILED_COLS = ["MEMBER", "FILE", "ACCOUNT", "DATE", "MODE", "PARTICULARS",
+FAILED_COLS = ["MEMBER", "FILE", "ACCOUNT", "DATE", "PARTICULARS",
                "DEPOSIT", "WITHDRAWAL", "BALANCE"]
-EXPORT_COLS = ["MEMBER", "ACCOUNT", "DATE", "MODE", "PARTICULARS", "DEPOSIT",
-               "WITHDRAWAL", "BALANCE", "KIND", "CATEGORY", "FY"]
 INVEST_EXPORT_COLS = ["MEMBER", "TYPE", "LABEL", "FOLIO", "UNITS",
                       "PURCHASE_DATE", "PURCHASE_NAV", "LATEST_DATE",
                       "LATEST_NAV", "VALUE_AT_COST", "VALUE_LATEST"]
@@ -100,6 +100,9 @@ def finish_run(lines, tag):
 # failed.csv
 # --------------------------------------------------------------------------
 def prior_failed_keys():
+    """{(owner, natural key)} of rows already in a failed-N.csv. Scoped per
+    owner (MEMBER column; legacy files without it use ""): the same entry for
+    a different member is a different entry (importer-exporter-specs.md)."""
     keys = set()
     if not os.path.isdir("output"):
         return keys
@@ -112,9 +115,10 @@ def prior_failed_keys():
                 continue
             with open(os.path.join(d, name), newline="") as f:
                 for r in csv.DictReader(f):
-                    keys.add(nkey(r["ACCOUNT"], _iso(r["DATE"]),
-                                  r["PARTICULARS"], money(r["DEPOSIT"]),
-                                  money(r["WITHDRAWAL"])))
+                    keys.add((r.get("MEMBER") or "",
+                              nkey(r["ACCOUNT"], _iso(r["DATE"]),
+                                   r["PARTICULARS"], money(r["DEPOSIT"]),
+                                   money(r["WITHDRAWAL"]))))
     return keys
 
 
@@ -132,8 +136,9 @@ def write_failed(failed, log, backend=None):
         seen = prior_failed_keys()
         kept_rows, skipped = [], 0
         for meta, t in rows:
-            key = nkey(meta["account"], _iso(t["date"]), t["part"],
-                       t["dep"], t["wd"])
+            key = (meta["member"],
+                   nkey(meta["account"], _iso(t["date"]), t["part"],
+                        t["dep"], t["wd"]))
             if key in seen or (backend and backend.has_entry(
                     meta["member"], account=meta["account"], date=_iso(t["date"]),
                     particulars=t["part"], deposit=t["dep"], withdrawal=t["wd"])):
@@ -143,7 +148,7 @@ def write_failed(failed, log, backend=None):
             kept_rows.append(
                 {"MEMBER": meta["member"], "FILE": meta["file"],
                  "ACCOUNT": meta["account"], "DATE": _ddmmyyyy(_iso(t["date"])),
-                 "MODE": t["mode"], "PARTICULARS": t["part"],
+                 "PARTICULARS": t["part"],
                  "DEPOSIT": t["dep"], "WITHDRAWAL": t["wd"], "BALANCE": t["bal"]})
         msg = f"  failed {fy}: {len(kept_rows)} rows"
         if kept_rows:
@@ -189,18 +194,14 @@ def import_bank_statements(backend, owner):
                                       []).append((
                         {"member": owner, "file": base, "account": acct}, t))
                 continue
-            for t in txs:
-                date_iso = _iso(t["date"])
-                kind = t.get("kind") or ("income" if t["dep"] > 0 else "expense")
-                cat = t.get("category") or ("" if kind == "income" else UNKNOWN)
-                if kind == "income":
-                    cat = ""  # income has only the default category
-                action = backend.upsert_bank_entry(
-                    owner, account=acct, date=date_iso, mode=t["mode"],
-                    particulars=t["part"], deposit=t["dep"], withdrawal=t["wd"],
-                    balance=t["bal"], kind=kind, category=cat,
-                    file=os.path.basename(path))
-                counts[action] += 1
+            rows = resolve([{
+                "account": acct, "date": _iso(t["date"]),
+                "particulars": t["part"], "deposit": t["dep"],
+                "withdrawal": t["wd"], "balance": t["bal"],
+                "kind": t.get("kind", ""), "category": t.get("category", ""),
+                "file": os.path.basename(path)} for t in txs])
+            for action, n in commit_rows(backend, owner, rows).items():
+                counts[action] += n
             backend.con.commit()
 
 
@@ -257,7 +258,10 @@ def import_investments(backend, owner):
                 for s in schemes:
                     action = backend.upsert_investment(
                         owner, type_="MF", label=s["scheme"], folio=s["folio"],
-                        units=s["units"], latest_date=_iso(s["nav_date"]),
+                        units=s["units"],
+                        purchase_date=_iso(s["purchase_date"]) or None,
+                        purchase_nav=s["purchase_nav"] or None,
+                        latest_date=_iso(s["nav_date"]),
                         latest_nav=s["nav"], value_at_cost=s["cost"],
                         value_latest=s["market"] or s["cost"])
                     counts[action] += 1
@@ -298,11 +302,7 @@ def export_entries(backend, login, args, out):
         rows = backend.entries(user_ids=scope, kinds=[args.kind] if args.kind else None,
                                category=args.category, fy=args.fy,
                                account=args.account, q=args.q)
-        cols = EXPORT_COLS
-        flat = [[r["user_id"], r["account"], _ddmmyyyy(r["date"]), r["mode"],
-                 r["particulars"], _fmt(r["deposit"]), _fmt(r["withdrawal"]),
-                 _fmt(r["balance"]), r["kind"], r["category"], r["fy"]]
-                for r in rows]
+        return write_entries(rows, out)
     w = csv.writer(out)
     w.writerow(cols)
     w.writerows(flat)
@@ -381,7 +381,11 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    backend = FinanceBackend()
+    with FinanceBackend() as backend:  # main() owns the connection
+        run(args, backend)
+
+
+def run(args, backend):
     backend.seed_members(load_members())
 
     if args.cmd == "auth":

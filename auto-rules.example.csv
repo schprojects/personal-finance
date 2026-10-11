@@ -1,0 +1,14 @@
+# auto-rules.example.csv - copy to auto-rules.csv (project folder) and edit.
+# One rule per line: KIND,CATEGORY,EXPRESSION    (first matching rule wins)
+# EXPRESSION = text found in PARTICULARS (any case); A|B = either; then optional
+#   @dir:dep (credits only) | @dir:wd (debits only) | @amt<=N, @amt>N (<, <=, >, >=, =)
+# Leave CATEGORY empty for income. Lines starting with # are ignored.
+income,,SALARY @dir:dep
+income,,INT.PD @dir:dep
+expense,Groceries,SM MART|BIGBASKET|DMART
+expense,Dining out,SWIGGY|ZOMATO|DOMINOS
+expense,Cash withdrawals,ATM @dir:wd
+expense,Shopping goods,AMAZON|FLIPKART @dir:wd @amt>=500
+expense,Bank & DP charges,@mode:BANK CHARGES
+investment,,ZERODHA|GROWW @dir:wd
+transfer,,TO FAMILY @dir:wd

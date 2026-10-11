@@ -16,14 +16,20 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KINDS = ["expense", "refund", "review", "income", "investment", "transfer",
          "reimbursed", "charge", "cash", "credit"]
 
-# Daily-spend baseline hides these in the dashboard.
-BASELINE_EXCLUDED = {"Income tax", "Vehicles", "Loan & EMI",
-                     "Bank & DP charges", "Misc & small"}
+# Daily-spend baseline hides these in the dashboard (dashboard-specs.md). The
+# small-misc category is deliberately NOT here: it is day-to-day spending.
+BASELINE_EXCLUDED = {"Income_tax", "Vehicles", "Loan_EMI", "Bank_DP_charges"}
 
 
 def load_members():
     """members.yaml -> [{'name', 'data_dir'}] from the project root."""
-    with open(os.path.join(BASE, "members.yaml")) as f:
+    path = os.path.join(BASE, "members.yaml")
+    if not os.path.isfile(path):
+        raise SystemExit(f"members.yaml not found at {path}: copy "
+                         "members.example.yaml to members.yaml and edit the names "
+                         "(with Docker, create it BEFORE `docker compose up`, or "
+                         "Docker makes a folder with that name)")
+    with open(path) as f:
         doc = yaml.safe_load(f)
     members = []
     for m in doc.get("members", []):

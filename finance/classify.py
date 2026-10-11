@@ -45,7 +45,7 @@ def _parse_carrier(rows):
         date = get("DATE").strip()
         if not date:
             continue
-        tx = {"date": date, "mode": get("MODE").strip(),
+        tx = {"date": date,
               "part": get("PARTICULARS").strip(), "dep": money(get("DEPOSIT")),
               "wd": money(get("WITHDRAWAL")), "bal": money(get("BALANCE")),
               "_carrier": True}
@@ -84,7 +84,7 @@ def parse_blocks(path):
         j = i + 1
         while j < n and not (rows[j][0] or "").strip():
             j += 1
-        j += 1  # header row DATE,MODE,PARTICULARS,...
+        j += 1  # header row DATE,MODE,PARTICULARS,... (MODE is bank noise: skipped, never stored)
         txs = []
         while j < n:
             r = rows[j]
@@ -95,7 +95,6 @@ def parse_blocks(path):
             if first and re.match(r"^\d{2}-\d{2}-\d{4}$", first):
                 txs.append({
                     "date": first,
-                    "mode": (r[1] or "").strip(),
                     "part": (r[2] or "").strip(),
                     "dep": money(r[3]), "wd": money(r[4]), "bal": money(r[5]),
                 })

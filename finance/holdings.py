@@ -23,6 +23,7 @@ MF_COLS = {
     "nav": ("nav",),
     "market": ("market value",),
     "purchase_date": ("purchase date",),
+    "purchase_nav": ("purchase nav",),
 }
 NAV_EXCLUDE = ("date", "purchase")  # "NAV Date"/"Purchase NAV" vs the NAV value
 
@@ -77,6 +78,24 @@ def xirr(flows, tol=1e-9, max_iter=200):
     return (lo + hi) / 2
 
 
+def investment_xirr(inv):
+    """XIRR (fraction) for a stored investment row, or None when its history is
+    partial: needs purchase date, latest date, cost (> 0) and latest value, with
+    parseable ISO dates and purchase before latest. Never raises (spec: show only
+    the current value when the history to determine XIRR is not available)."""
+    try:
+        cost, latest = inv.get("value_at_cost"), inv.get("value_latest")
+        if cost is None or latest is None or cost <= 0:
+            return None
+        pd = dt.date.fromisoformat(str(inv.get("purchase_date") or ""))
+        ld = dt.date.fromisoformat(str(inv.get("latest_date") or ""))
+        if pd >= ld:
+            return None
+        return xirr([(pd, -float(cost)), (ld, float(latest))])
+    except (TypeError, ValueError):
+        return None
+
+
 def _day(s):
     for fmt in ("%d-%m-%Y", "%d-%b-%Y"):
         try:
@@ -123,6 +142,7 @@ def parse_mf_sheet(header, rows):
             "ret_pct": absolute_return_pct(cost, market),
             "purchase_date": (r[c["purchase_date"]].strip()
                               if c["purchase_date"] is not None else ""),
+            "purchase_nav": g("purchase_nav"),
             "xirr": _purchase_xirr(cost, market,
                                    r[c["purchase_date"]].strip()
                                    if c["purchase_date"] is not None else "",

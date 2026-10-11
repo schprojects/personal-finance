@@ -1,0 +1,7 @@
+# Copy to members.yaml (gitignored) and edit. One row per family member.
+# data_dir is where that member's statements live: data/<member>/bank-statements/<FY>/*.csv
+members:
+  - name: alex
+    data_dir: data/alex
+  - name: blair
+    data_dir: data/blair
