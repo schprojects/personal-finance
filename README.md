@@ -83,6 +83,93 @@ command.** If a bind-mounted file is missing, Docker creates a *folder* with
 that name instead; the app then ignores the rules and `impex` stops with a
 "members.yaml not found" message. Delete the folder and copy the example file.
 
+## Deploy the course demo for free
+
+Before using either host, commit and push `demo/demo.db` and `demo/README.md`
+to the GitHub repository. The database contains synthetic data and
+intentionally public credentials. It is safe only for a public course
+demo—never add personal or confidential data.
+
+Both services start from the files committed to GitHub. Changes that visitors
+make to the hosted SQLite database remain only in that running instance; they
+are not committed back to GitHub. A restart, sleep, or redeployment may restore
+the checked-in seed and discard those changes.
+
+### Streamlit Community Cloud (recommended)
+
+[Streamlit Community Cloud](https://docs.streamlit.io/deploy/streamlit-community-cloud)
+is the simplest option for this Streamlit course demo:
+
+1. Sign in to the Community Cloud workspace and connect the GitHub account that
+   can access the repository.
+2. Click **Create app**, select the repository and branch, and set the entrypoint
+   file to `personal-finance.py`.
+3. Open **Advanced settings** and paste this root-level TOML entry into the
+   **Secrets** field (do not place it under a TOML section):
+
+   ```toml
+   FINANCE_DB = "demo/demo.db"
+   ```
+
+4. Save the settings and deploy the app.
+
+Root-level Streamlit secrets are exposed as environment variables, so the
+existing `FINANCE_DB` setting works without an application change. See the
+official guides for the [deployment workflow](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy)
+and [Community Cloud secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management).
+
+Sign in to the deployed app with either public demo account:
+
+| Username | Password |
+|---|---|
+| `user-A` | `demo` |
+| `user-B` | `demo` |
+
+Community Cloud watches the selected GitHub branch and automatically updates
+or redeploys the app after a push. Apps without traffic for 12 hours go to
+sleep and wake when visited. Local SQLite storage is not guaranteed to persist,
+so a reboot, redeployment, or platform cleanup may restore `demo/demo.db` from
+GitHub. See Streamlit's documentation on [app management and sleep](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app)
+and [local-file persistence](https://docs.streamlit.io/develop/concepts/connections/connecting-to-data#a-simple-starting-point---using-a-local-sqlite-database).
+
+### Render Free Web Service
+
+Use Render when the lesson should demonstrate a general-purpose web-service
+deployment rather than a Streamlit-specific host:
+
+1. In the Render dashboard, choose **New > Web Service**, connect GitHub if
+   needed, and select this repository.
+2. Select the **Free** instance type and use this build command:
+
+   ```sh
+   pip install -r requirements.txt
+   ```
+
+3. Use this start command:
+
+   ```sh
+   streamlit run personal-finance.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
+   ```
+
+4. Add the environment variable `FINANCE_DB` with the value `demo/demo.db`,
+   then create the web service.
+
+Sign in with `user-A` / `demo` or `user-B` / `demo`. These credentials and all
+seeded data are public; do not upload or enter personal or confidential data.
+
+A free Render web service spins down after 15 minutes without an inbound HTTP
+request or WebSocket message. A connected Streamlit session can therefore keep
+it active by sending WebSocket messages. The next request or WebSocket
+connection wakes a sleeping service, with a cold start of about one minute.
+Render's filesystem is ephemeral, so changes to `demo/demo.db` are lost on a
+sleep, restart, or redeploy. See Render's official [free-service documentation](https://render.com/docs/free)
+for current limits.
+
+For the shortest course setup, prefer Streamlit Community Cloud. Choose Render
+when the deployment itself should illustrate a conventional web service.
+Neither free option is suitable when database edits must persist. Durable
+SQLite requires persistent storage on a paid service or a VM-based host.
+
 ## Writing auto-rules
 
 The Import view classifies rows from `auto-rules.csv` in the project folder (the

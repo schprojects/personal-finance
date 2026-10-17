@@ -16,6 +16,9 @@ dist.zip
 .env
 ui/
 
+# Local-only demo fixture generator; never include it in a release commit.
+demo/create_demo_db.py
+
 # exported Claude Code session transcripts
 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.txt
 session-*.md
